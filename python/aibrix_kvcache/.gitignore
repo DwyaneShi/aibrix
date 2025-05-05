@@ -7,3 +7,6 @@ __pycache__
 
 # ruff
 .ruff_cache
+
+# mypy
+.mypy_cache
