@@ -44,23 +44,23 @@ try:
         def decorator(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                nvtx.range_push(
-                    msg=msg, domain=domain, color=_nvtx_get_color(msg)
+                nvtx.push_range(
+                    message=msg, domain=domain, color=_nvtx_get_color(msg)
                 )
                 try:
                     return await func(*args, **kwargs)
                 finally:
-                    nvtx.range_pop()
+                    nvtx.pop_range()
 
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                nvtx.range_push(
-                    msg=msg, domain=domain, color=_nvtx_get_color(msg)
+                nvtx.push_range(
+                    message=msg, domain=domain, color=_nvtx_get_color(msg)
                 )
                 try:
                     return func(*args, **kwargs)
                 finally:
-                    nvtx.range_pop()
+                    nvtx.pop_range()
 
             return (
                 async_wrapper

@@ -23,8 +23,8 @@ from .memory import MemoryRegion
 class KVCacheHandle(ABC):
     """Cache handle to support zero-copy APIs."""
 
-    @abstractmethod
     @property
+    @abstractmethod
     def memory_regions(self) -> Sequence[MemoryRegion]:
         raise NotImplementedError
 

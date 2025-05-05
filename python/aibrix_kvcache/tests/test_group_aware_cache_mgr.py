@@ -29,6 +29,7 @@ from aibrix_kvcache import (
     GroupAwareKVCacheManager,
     KVCacheBlockLayout,
     KVCacheConfig,
+    cache_mgr,
 )
 
 from .conftest import (
@@ -37,6 +38,8 @@ from .conftest import (
     get_cache_conf,
     randomize_cache_handle,
 )
+
+cache_mgr.TESTING_DISABLE_PIN_MEMORY = True
 
 
 @pytest.fixture(
@@ -136,7 +139,7 @@ def my_get_cache_conf(rank: int, world_size: int, layout: KVCacheBlockLayout):
     heads = list(range(world_size * 4))
 
     shape, spec = get_cache_conf(layout)
-    spec.tensor_spec.heads = (heads[rank * 4 : (rank + 1) * 4],)
+    spec.tensor_spec.heads = heads[rank * 4 : (rank + 1) * 4]
     return shape, spec
 
 

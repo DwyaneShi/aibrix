@@ -756,8 +756,8 @@ class KVCacheMetrics(Metrics):
         mgr: The metrics of the cache mgr.
     """
 
-    l1: L1CacheMetrics
-    l2: L2CacheMetrics
+    l1: L1CacheMetrics | None
+    l2: L2CacheMetrics | None
     mgr: CacheMgrMetrics
 
     def __init__(
@@ -770,6 +770,9 @@ class KVCacheMetrics(Metrics):
         enable_time_measurement: bool = True,
         enable_breakdown_measurement: bool = True,
     ) -> None:
+        self.l1 = None
+        self.l2 = None
+
         if enable_l1:
             self.l1 = L1CacheMetrics(
                 cache_type="L1Cache",

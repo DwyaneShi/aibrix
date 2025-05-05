@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     # second rule.
     AIBRIX_KV_CACHE_OL_DOUBLE_GET_THRESHOLD: Tuple[int, float] = (4, 0.1)
     AIBRIX_KV_CACHE_OL_CHUNK_SIZE: int = 512
-    AIBRIX_KV_CACHE_OL_METRICS_ENABLED: bool = True
     AIBRIX_KV_CACHE_OL_TIME_MEASUREMENT_ENABLED: bool = True
     AIBRIX_KV_CACHE_OL_BREAKDOWN_MEASUREMENT_ENABLED: bool = True
 
@@ -116,10 +115,6 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
     ),
     "AIBRIX_KV_CACHE_OL_CHUNK_SIZE": lambda: int(
         os.getenv("AIBRIX_KV_CACHE_OL_CHUNK_SIZE", "512")
-    ),
-    "AIBRIX_KV_CACHE_OL_METRICS_ENABLED": lambda: (
-        os.getenv("AIBRIX_KV_CACHE_OL_METRICS_ENABLED", "1").strip().lower()
-        in ("1", "true")
     ),
     "AIBRIX_KV_CACHE_OL_TIME_MEASUREMENT_ENABLED": lambda: (
         os.getenv("AIBRIX_KV_CACHE_OL_TIME_MEASUREMENT_ENABLED", "1")

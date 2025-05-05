@@ -41,6 +41,7 @@ from .status import Status, StatusCodes
 logger = getLogger(__name__)
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+TESTING_DISABLE_PIN_MEMORY: bool = False
 
 
 @dataclass
@@ -226,6 +227,7 @@ class KVCacheManager(ABC):
         raise NotImplementedError
 
     @property
+    @abstractmethod
     def metrics(self) -> KVCacheMetrics:
         """Get the metrics of the kv cache service."""
         raise NotImplementedError
@@ -238,20 +240,21 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         config: The KV cache manager configuration.
     """
 
-    _l1_cache: L1Cache
-    _l2_cache: L2Cache
-    _executor: Executor
-    _event_loop: asyncio.AbstractEventLoop
-    _thread: threading.Thread
-    _lock: threading.Lock
-    _infight_cv: threading.Condition
-    _l2_inflight_writes: int
-    _l2_inflight_quota: int
-    _allocator: TensorPoolAllocator
-    _metrics: KVCacheMetrics
-
     def __init__(self, config: KVCacheConfig) -> None:
         KVCacheManager.__init__(self, config)
+
+        self._l1_cache: L1Cache | None = None
+        self._l2_cache: L2Cache | None = None
+        self._executor: Executor | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._l2_inflight_writes: int = 0
+        self._l2_inflight_quota: int = 0
+        self._allocator: TensorPoolAllocator | None = None
+        self._metrics: KVCacheMetrics | None = None
+
+        self._lock = threading.Lock()
+        self._infight_cv = threading.Condition(self._lock)
 
         self._double_get_threshold: Tuple[int, float] = (
             envs.AIBRIX_KV_CACHE_OL_DOUBLE_GET_THRESHOLD
@@ -284,7 +287,10 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             self._chunk_size = 4 * self.block_ntokens
 
         device: str = envs.AIBRIX_KV_CACHE_OL_DEVICE
-        pin_memory: bool = device == "cpu"
+
+        pin_memory: bool = False
+        if not TESTING_DISABLE_PIN_MEMORY:
+            pin_memory = device == "cpu"
 
         enable_l1: bool = envs.AIBRIX_KV_CACHE_OL_L1_CACHE_ENABLED
         enable_l2: bool = len(envs.AIBRIX_KV_CACHE_OL_L2_CACHE_BACKEND) > 0
@@ -292,23 +298,23 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             envs.AIBRIX_KV_CACHE_OL_L1_CACHE_CAPACITY_GB * 1024**3
         )
         capacity: int = capacity_nbytes // self.block_nbytes
-        if envs.AIBRIX_KV_CACHE_OL_METRICS_ENABLED:
-            enable_time_measurement = (
-                envs.AIBRIX_KV_CACHE_OL_TIME_MEASUREMENT_ENABLED
-            )
-            enable_breakdown_measurement = (
-                envs.AIBRIX_KV_CACHE_OL_BREAKDOWN_MEASUREMENT_ENABLED
-            )
-            self._metrics = KVCacheMetrics(
-                block_ntokens=self.block_ntokens,
-                capacity=capacity,
-                enable_l1=enable_l1,
-                enable_l2=enable_l2,
-                enable_time_measurement=enable_time_measurement,
-                enable_breakdown_measurement=enable_breakdown_measurement,
-            )
+        enable_time_measurement = (
+            envs.AIBRIX_KV_CACHE_OL_TIME_MEASUREMENT_ENABLED
+        )
+        enable_breakdown_measurement = (
+            envs.AIBRIX_KV_CACHE_OL_BREAKDOWN_MEASUREMENT_ENABLED
+        )
+        self._metrics = KVCacheMetrics(
+            block_ntokens=self.block_ntokens,
+            capacity=capacity,
+            enable_l1=enable_l1,
+            enable_l2=enable_l2,
+            enable_time_measurement=enable_time_measurement,
+            enable_breakdown_measurement=enable_breakdown_measurement,
+        )
 
         # init MeasurableBase
+        assert self._metrics is not None
         MeasurableBase.__init__(self, self._metrics.mgr)
 
         self._allocator = TensorPoolAllocator(
@@ -383,8 +389,6 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             self._thread = threading.Thread(
                 target=self._event_loop.run_forever, daemon=True
             )
-            self._lock = threading.Lock()
-            self._infight_cv = threading.Condition(self._lock)
             self._thread.start()
 
             # launch L2Cache
@@ -439,6 +443,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
 
     @property
     def metrics(self) -> KVCacheMetrics:
+        assert self._metrics is not None
         return self._metrics
 
     def __repr__(self) -> str:
@@ -511,6 +516,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             The status of the ingestion operation and the number of tokens have
             been scheduled.
         """
+        assert self._l2_cache is not None, "l2_cache is not initialized."
         with self._lock:
             log_every_n_seconds(
                 logger,
@@ -556,6 +562,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
                 )
 
         # Async write to L2Cache
+        assert self._event_loop is not None
         future = asyncio.run_coroutine_threadsafe(
             self._l2_cache.put(prefix, tokens, value), self._event_loop
         )
@@ -575,6 +582,8 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             The status of the ingestion operation and the number of tokens have
             been ingested.
         """
+        assert self._l2_cache is not None, "l2_cache is not initialized."
+        assert self._event_loop is not None
         prefix, tokens = key_pair
         future = asyncio.run_coroutine_threadsafe(
             self._l2_cache.put(prefix, tokens, value), self._event_loop
@@ -707,6 +716,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             * self._l2_cache_per_token_timeout_ms
         ) / 1000
 
+        assert self._event_loop is not None
         future = asyncio.run_coroutine_threadsafe(
             self._l2_cache.exists(prefix_curr, tokens_curr), self._event_loop
         )
@@ -798,12 +808,14 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
 
         # allocate MRs to hold fetched tensors
         nblocks_curr = len(tokens_curr) // self.block_ntokens
+        assert self._allocator is not None
         status = self._allocator.alloc(nblocks_curr * self.block_nbytes)
         if not status.is_ok():
             return status if num_fetched_blocks == 0 else l1_status
         mrs: List[MemoryRegion] = list(status.get())
         tokens_curr = tokens_curr[: len(mrs) * self.block_ntokens]
 
+        assert self._event_loop is not None
         future = asyncio.run_coroutine_threadsafe(
             self._l2_cache.get(prefix_curr, tokens_curr, mrs), self._event_loop
         )
@@ -921,11 +933,14 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
                 if nblocks <= 0:
                     status = Status(StatusCodes.OUT_OF_MEMORY)
             if status is None:
+                assert self._allocator is not None
                 status = self._allocator.alloc(self.block_nbytes * nblocks)
         else:
             # l2 cache only, sync put
+            assert self._allocator is not None
             status = self._allocator.alloc(self.block_nbytes * nblocks)
 
+        assert status is not None
         if not status.is_ok():
             return Status(status)
         return Status.ok(
@@ -974,7 +989,9 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
                 return status
             return Status.ok(status.get() * self.block_ntokens)
         else:
-            return self._l2_ingestion_callback((prefix, tokens), kv_tensors)
+            return self._l2_ingestion_callback(
+                (prefix or [], tokens), kv_tensors
+            )
 
     @nvtx_range("delete", "KVCacheManager")
     def delete(
@@ -995,6 +1012,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
                 return status
 
         if self._l2_cache is not None:
+            assert self._event_loop is not None
             future = asyncio.run_coroutine_threadsafe(
                 self._l2_cache.delete(prefix, tokens), self._event_loop
             )
