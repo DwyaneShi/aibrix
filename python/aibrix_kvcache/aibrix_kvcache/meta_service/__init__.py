@@ -12,16 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .connector import (
-    Connector,
-    ConnectorConfig,
-    ConnectorFeature,
-    ConnectorRegisterDescriptor,
-)
+from .meta_service import MetaService, MetaServiceConfig
+from .redis_meta_service import RedisMetaService
 
 __all__ = [
-    "Connector",
-    "ConnectorConfig",
-    "ConnectorFeature",
-    "ConnectorRegisterDescriptor",
+    "MetaService",
+    "MetaServiceConfig",
+    "RedisMetaService",
 ]

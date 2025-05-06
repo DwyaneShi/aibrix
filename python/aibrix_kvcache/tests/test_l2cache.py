@@ -46,6 +46,7 @@ def l2cache_fixture(cache_conf_fixture):
     try:
         cache = L2Cache(
             backend_name="ROCKSDB",
+            placement_policy="SIMPLE",
             namespace="test",
             block_spec=spec,
             executor=ThreadPoolExecutor(max_workers=2),

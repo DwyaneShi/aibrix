@@ -39,6 +39,16 @@ class ConnectorFeature:
 
 
 @dataclass
+class ConnectorConfig:
+    """The config of the kv cache connector."""
+
+    backend_name: str
+    namespace: str
+    partition_id: str
+    executor: Executor
+
+
+@dataclass
 class ConnectorRegisterDescriptor:
     """The register descriptor"""
 
@@ -50,35 +60,38 @@ class Connector(Generic[K, V]):
 
     @staticmethod
     def create(
-        backend_name: str,
-        namespace: str,
-        partition_id: str,
-        executor: Executor,
+        config: ConnectorConfig,
+        **kwargs,
     ) -> "Connector":
         """Create a connector."""
+        backend_name = config.backend_name
+        namespace = config.namespace
+        partition_id = config.partition_id
+        executor = config.executor
+
         conn_id = f"{namespace}_{partition_id}"
         if backend_name == "ROCKSDB":
             from .rocksdb import RocksDBConnector
 
-            return RocksDBConnector.from_envs(conn_id, executor)
+            return RocksDBConnector.from_envs(conn_id, executor, **kwargs)
         elif backend_name == "INFINISTORE":
             from .infinistore import InfiniStoreConnector
 
-            return InfiniStoreConnector.from_envs(conn_id, executor)
+            return InfiniStoreConnector.from_envs(conn_id, executor, **kwargs)
         elif backend_name == "HPKV":
             from .hpkv import HPKVConnector
 
-            return HPKVConnector.from_envs(conn_id, executor)
+            return HPKVConnector.from_envs(conn_id, executor, **kwargs)
         elif backend_name == "MOCK":
             from .mock import MockConnector
 
-            return MockConnector.from_envs(conn_id, executor)
+            return MockConnector.from_envs(conn_id, executor, **kwargs)
         else:
             raise ValueError(f"Unknown connector type: {backend_name}")
 
     @classmethod
     @abstractmethod
-    def from_envs(cls, conn_id: str, executor: Executor):
+    def from_envs(cls, conn_id: str, executor: Executor, **kwargs):
         """Create a connector from environment variables."""
         raise NotImplementedError
 

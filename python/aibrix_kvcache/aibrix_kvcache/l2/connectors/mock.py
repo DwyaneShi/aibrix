@@ -55,7 +55,9 @@ class MockConnector(Connector[bytes, torch.Tensor], AsyncBase):
         self.register_cache: Dict[int, int] = {}
 
     @classmethod
-    def from_envs(cls, conn_id: str, executor: Executor) -> "MockConnector":
+    def from_envs(
+        cls, conn_id: str, executor: Executor, **kwargs
+    ) -> "MockConnector":
         """Create a connector from environment variables."""
         config = MockConfig(
             use_rdma=envs.AIBRIX_KV_CACHE_OL_MOCK_USE_RDMA,
@@ -75,6 +77,9 @@ class MockConnector(Connector[bytes, torch.Tensor], AsyncBase):
         if self.config.use_rdma:
             feature.rdma = True
         return ConnectorFeature()
+
+    def __del__(self) -> None:
+        self.close()
 
     @Status.capture_exception
     def open(self) -> Status:

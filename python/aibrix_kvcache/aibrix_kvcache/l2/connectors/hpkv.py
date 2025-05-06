@@ -68,11 +68,20 @@ class HPKVConnector(Connector[bytes, torch.Tensor], AsyncBase):
         self.conn: HPKVClient | None = None
 
     @classmethod
-    def from_envs(cls, conn_id: str, executor: Executor) -> "HPKVConnector":
+    def from_envs(
+        cls, conn_id: str, executor: Executor, **kwargs
+    ) -> "HPKVConnector":
         """Create a connector from environment variables."""
+        remote_addr = kwargs.get(
+            "addr", envs.AIBRIX_KV_CACHE_OL_HPKV_REMOTE_ADDR
+        )
+        remote_port = kwargs.get(
+            "port", envs.AIBRIX_KV_CACHE_OL_HPKV_REMOTE_PORT
+        )
+
         config = HPKVConfig(
-            remote_addr=envs.AIBRIX_KV_CACHE_OL_HPKV_REMOTE_ADDR,
-            remote_port=envs.AIBRIX_KV_CACHE_OL_HPKV_REMOTE_PORT,
+            remote_addr=remote_addr,
+            remote_port=remote_port,
             local_addr=envs.AIBRIX_KV_CACHE_OL_HPKV_LOCAL_ADDR,
             local_port=envs.AIBRIX_KV_CACHE_OL_HPKV_LOCAL_PORT,
         )
@@ -88,6 +97,9 @@ class HPKVConnector(Connector[bytes, torch.Tensor], AsyncBase):
             rdma=True,
         )
         return feature
+
+    def __del__(self) -> None:
+        self.close()
 
     def _key(self, key: bytes) -> str:
         return key.hex() + self.key_suffix

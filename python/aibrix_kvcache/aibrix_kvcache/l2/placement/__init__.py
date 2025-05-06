@@ -12,16 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .connector import (
-    Connector,
-    ConnectorConfig,
-    ConnectorFeature,
-    ConnectorRegisterDescriptor,
-)
+from .placement import BasePlacement, Member, Placement, PlacementConfig
+from .simple_placement import SimplePlacement
 
 __all__ = [
-    "Connector",
-    "ConnectorConfig",
-    "ConnectorFeature",
-    "ConnectorRegisterDescriptor",
+    "BasePlacement",
+    "SimplePlacement",
+    "Member",
+    "Placement",
+    "PlacementConfig",
 ]

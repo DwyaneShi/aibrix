@@ -43,16 +43,30 @@ class InfiniStoreConnector(Connector[bytes, torch.Tensor], AsyncBase):
 
     @classmethod
     def from_envs(
-        cls, conn_id: str, executor: Executor
+        cls, conn_id: str, executor: Executor, **kwargs
     ) -> "InfiniStoreConnector":
         """Create a connector from environment variables."""
+        host_addr = kwargs.get(
+            "addr", envs.AIBRIX_KV_CACHE_OL_INFINISTORE_HOST_ADDR
+        )
+        service_port = kwargs.get(
+            "port", envs.AIBRIX_KV_CACHE_OL_INFINISTORE_SERVICE_PORT
+        )
+        dev_list = envs.AIBRIX_KV_CACHE_OL_INFINISTORE_VISIBLE_DEV_LIST
+        num_visible_gpus = torch.cuda.device_count()
+        gpu_idx = torch.cuda.current_device()
+        # num. of RNICs might be less than num. of visible GPUs
+        while len(dev_list) < num_visible_gpus:
+            dev_list.extend(dev_list)
+        dev_name = dev_list[gpu_idx]
+
         config = infinistore.ClientConfig(
-            host_addr=envs.AIBRIX_KV_CACHE_OL_INFINISTORE_HOST_ADDR,
-            service_port=envs.AIBRIX_KV_CACHE_OL_INFINISTORE_SERVICE_PORT,
+            host_addr=host_addr,
+            service_port=service_port,
             connection_type=envs.AIBRIX_KV_CACHE_OL_INFINISTORE_CONNECTION_TYPE,
             ib_port=envs.AIBRIX_KV_CACHE_OL_INFINISTORE_IB_PORT,
             link_type=envs.AIBRIX_KV_CACHE_OL_INFINISTORE_LINK_TYPE,
-            dev_name=envs.AIBRIX_KV_CACHE_OL_INFINISTORE_DEV_NAME,
+            dev_name=dev_name,
         )
         return cls(config, conn_id, executor)
 
@@ -71,6 +85,9 @@ class InfiniStoreConnector(Connector[bytes, torch.Tensor], AsyncBase):
             # feature.mput_mget = True
             feature.rdma = True
         return feature
+
+    def __del__(self) -> None:
+        self.close()
 
     def _key(self, key: bytes) -> str:
         return key.hex() + self.key_suffix

@@ -24,11 +24,13 @@ from ..cache_handle import KVCacheHandle
 from ..common import nvtx_range
 from ..common.absl_logging import getLogger, log_every_n_seconds
 from ..memory import MemoryRegion
+from ..meta_service import MetaService
 from ..metrics import L2CacheMetrics, MeasurableBase, MetricRecorder
 from ..spec import KVCacheBlockLayout, KVCacheBlockSpec
 from ..status import Status, StatusCodes
-from .connectors import Connector, ConnectorRegisterDescriptor
+from .connectors import Connector, ConnectorConfig, ConnectorRegisterDescriptor
 from .key_builders import KeyBuilder, RawKeyBuilder
+from .placement import Placement, PlacementConfig
 
 logger = getLogger(__name__)
 
@@ -39,20 +41,26 @@ class L2Cache(MeasurableBase):
     def __init__(
         self,
         backend_name: str,
+        placement_policy: str,
         namespace: str,
         block_spec: KVCacheBlockSpec,
         executor: Executor,
+        refresh_interval_s: int = 0,
         op_batch: int = 8,
         metrics: L2CacheMetrics | None = None,
+        meta_service: MetaService | None = None,
     ) -> None:
         """Create a cache object.
         Args:
             backend_name (str): The name of cache backend.
+            placement_policy (str): The placement policy.
             namespace (str): Namespace.
             block_spec (KVCacheBlockSpec): The block spec.
             executor (Executor): The executor.
+            refresh_interval_s (int): The refresh interval in seconds.
             op_batch (int): The number of ops in a batch.
             metrics (L2CacheMetrics): metrics recorder.
+            meta_service (MetaService): meta service.
         """
         super().__init__(metrics)
         self.block_spec: KVCacheBlockSpec = block_spec
@@ -78,9 +86,26 @@ class L2Cache(MeasurableBase):
             ]
         )
         partition_id = f"h{cat_head_ids}_l{cat_layer_ids}"
-        self._backend = Connector.create(
-            backend_name, namespace, partition_id, executor
+        backend_config = ConnectorConfig(
+            backend_name=backend_name,
+            namespace=namespace,
+            partition_id=partition_id,
+            executor=executor,
         )
+
+        if meta_service is None:
+            # direct mode
+            self._backend = Connector.create(backend_config)
+        else:
+            # cluster mode, using placement policy
+            placement_config = PlacementConfig(
+                placement_policy=placement_policy,
+                conn_config=backend_config,
+                meta_service=meta_service,
+                refresh_interval_s=refresh_interval_s,
+            )
+            self._backend = Placement.create(placement_config)
+
         self._register_descs: Set[ConnectorRegisterDescriptor] = set()
 
         logger.info(

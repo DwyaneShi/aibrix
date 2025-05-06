@@ -13,10 +13,13 @@
 # limitations under the License.
 
 import os
+import threading
 from typing import Sequence
 
 import pytest
+import redis
 import torch
+from fakeredis import TcpFakeServer
 
 from aibrix_kvcache.cache_handle import KVCacheHandle
 from aibrix_kvcache.memory import MemoryRegion, TensorPoolAllocator
@@ -101,3 +104,35 @@ def randomize_cache_handle(handle: KVCacheHandle):
     tensors = handle.to_tensors()
     for tensor in tensors:
         tensor.view(CACHE_DTYPE).uniform_()
+
+
+@pytest.fixture
+def redis_server():
+    """Fixture that launches a fake Redis server for testing."""
+    server_address = ("127.0.0.1", 6379)
+    TcpFakeServer.allow_reuse_address = True
+    redis_server = TcpFakeServer(
+        server_address=server_address, server_type="redis"
+    )
+    t = threading.Thread(target=redis_server.serve_forever, daemon=True)
+    t.start()
+    try:
+        yield server_address
+    finally:
+        redis_server.shutdown()
+        t.join()
+
+
+@pytest.fixture
+def redis_client(redis_server):
+    """Redis client connected to the test redis server."""
+    host, port = redis_server
+    client = redis.Redis(
+        host=host,
+        port=port,
+    )
+    client.ping()  # Verify connection
+    try:
+        yield client
+    finally:
+        client.flushall()  # Clean up after each test

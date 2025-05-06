@@ -34,6 +34,7 @@ from .config import KVCacheConfig
 from .l1 import L1Cache
 from .l2 import L2Cache
 from .memory import MemoryRegion, TensorPoolAllocator
+from .meta_service import MetaService
 from .metrics import KVCacheMetrics, MeasurableBase, MetricRecorder
 from .spec import KVCacheBlockLayout, KVCacheBlockSpec
 from .status import Status, StatusCodes
@@ -252,6 +253,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         self._l2_inflight_quota: int = 0
         self._allocator: TensorPoolAllocator | None = None
         self._metrics: KVCacheMetrics | None = None
+        self._ms: MetaService | None = None
 
         self._lock = threading.Lock()
         self._infight_cv = threading.Condition(self._lock)
@@ -313,6 +315,12 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             enable_breakdown_measurement=enable_breakdown_measurement,
         )
 
+        ms_backend: str = envs.AIBRIX_KV_CACHE_OL_META_SERVICE_BACKEND
+        if len(ms_backend) > 0:
+            self._ms = MetaService.create(ms_backend)
+            self._ms.open()
+            logger.info(f"Using meta service backend: {self._ms.name}")
+
         # init MeasurableBase
         assert self._metrics is not None
         MeasurableBase.__init__(self, self._metrics.mgr)
@@ -356,13 +364,20 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
                 // self.block_ntokens
             )
 
+            placement_policy = envs.AIBRIX_KV_CACHE_OL_L2_CACHE_PLACEMENT_POLICY
+            refresh_interval_s = (
+                envs.AIBRIX_KV_CACHE_OL_META_SERVICE_REFRESH_INTERVAL_S
+            )
             self._l2_cache = L2Cache(
                 backend_name=backend_name,
+                placement_policy=placement_policy,
                 namespace=namespace,
                 block_spec=self.block_spec,
                 executor=self._executor,
+                refresh_interval_s=refresh_interval_s,
                 op_batch=op_batch,
                 metrics=self._metrics.l2,
+                meta_service=self._ms,
             )
 
             # more capacity for async/sync load

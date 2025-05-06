@@ -46,8 +46,11 @@ class RocksDBConnector(Connector[bytes, torch.Tensor], AsyncBase):
         self.store: rocksdict.Rdict | None = None
 
     @classmethod
-    def from_envs(cls, conn_id: str, executor: Executor) -> "RocksDBConnector":
+    def from_envs(
+        cls, conn_id: str, executor: Executor, **kwargs
+    ) -> "RocksDBConnector":
         """Create a connector from environment variables."""
+        assert len(kwargs) == 0, "rocksdb connector does not support kwargs"
         root = envs.AIBRIX_KV_CACHE_OL_ROCKSDB_ROOT
         root = os.path.join(os.path.expanduser(root), conn_id)
         opts = rocksdict.Options(raw_mode=True)
@@ -84,6 +87,9 @@ class RocksDBConnector(Connector[bytes, torch.Tensor], AsyncBase):
     @property
     def feature(self) -> ConnectorFeature:
         return ConnectorFeature()
+
+    def __del__(self) -> None:
+        self.close()
 
     @Status.capture_exception
     def open(self) -> Status:

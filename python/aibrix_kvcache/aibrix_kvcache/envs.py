@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import TYPE_CHECKING, Any, Callable, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple
 
 if TYPE_CHECKING:
     # (minimum number of blocks, ratio)
@@ -50,6 +50,19 @@ if TYPE_CHECKING:
     AIBRIX_KV_CACHE_OL_L2_CACHE_COMPRESSION: str = ""
     AIBRIX_KV_CACHE_OL_L2_CACHE_OP_BATCH: int = 32
     AIBRIX_KV_CACHE_OL_L2_CACHE_PER_TOKEN_TIMEOUT_MS: int = 20
+    # L2 cache placement policy. Defaults to "SIMPLE".
+    # Only applicable if using meta service.
+    AIBRIX_KV_CACHE_OL_L2_CACHE_PLACEMENT_POLICY: str = "SIMPLE"
+
+    # If meta service backend is not set, L2 cache backend will use direct
+    # mode to access the given cache server.
+    # Otherwise, we will get membership information from meta service
+    # and construct the L2 cache cluster.
+    AIBRIX_KV_CACHE_OL_META_SERVICE_BACKEND: str = ""
+    # L2 cache meta service refresh interval in seconds. Defaults to 30.
+    AIBRIX_KV_CACHE_OL_META_SERVICE_REFRESH_INTERVAL_S: int = 30
+    AIBRIX_KV_CACHE_OL_META_SERVICE_URL: str = ""
+    AIBRIX_KV_CACHE_OL_META_SERVICE_CLUSTER_META_KEY: str = ""
 
     # Ingestion type, only applicable if L1 cache is enabled. Defaults to "HOT".
     # "ALL": all newly put data in L1 cache will be put onto L2 cache.
@@ -85,7 +98,7 @@ if TYPE_CHECKING:
     AIBRIX_KV_CACHE_OL_INFINISTORE_CONNECTION_TYPE: str = "RDMA"
     AIBRIX_KV_CACHE_OL_INFINISTORE_IB_PORT: int = 1
     AIBRIX_KV_CACHE_OL_INFINISTORE_LINK_TYPE: str = "Ethernet"
-    AIBRIX_KV_CACHE_OL_INFINISTORE_DEV_NAME: str = "mlx5_0"
+    AIBRIX_KV_CACHE_OL_INFINISTORE_VISIBLE_DEV_LIST: List[str] = ["mlx5_0"]
     AIBRIX_KV_CACHE_OL_INFINISTORE_USE_GDR: bool = True
 
     # HPKV Env Vars
@@ -176,6 +189,25 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
     "AIBRIX_KV_CACHE_OL_L2_CACHE_PER_TOKEN_TIMEOUT_MS": lambda: int(
         os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_PER_TOKEN_TIMEOUT_MS", "20")
     ),
+    "AIBRIX_KV_CACHE_OL_META_SERVICE_BACKEND": lambda: (
+        os.getenv("AIBRIX_KV_CACHE_OL_META_SERVICE_BACKEND", "").strip().upper()
+    ),
+    "AIBRIX_KV_CACHE_OL_META_SERVICE_REFRESH_INTERVAL_S": lambda: int(
+        os.getenv("AIBRIX_KV_CACHE_OL_META_SERVICE_REFRESH_INTERVAL_S", "30")
+    ),
+    "AIBRIX_KV_CACHE_OL_META_SERVICE_URL": lambda: (
+        os.getenv("AIBRIX_KV_CACHE_OL_META_SERVICE_URL", "").strip()
+    ),
+    "AIBRIX_KV_CACHE_OL_META_SERVICE_CLUSTER_META_KEY": lambda: (
+        os.getenv(
+            "AIBRIX_KV_CACHE_OL_META_SERVICE_CLUSTER_META_KEY", ""
+        ).strip()
+    ),
+    "AIBRIX_KV_CACHE_OL_L2_CACHE_PLACEMENT_POLICY": lambda: (
+        os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_PLACEMENT_POLICY", "SIMPLE")
+        .strip()
+        .upper()
+    ),
     "AIBRIX_KV_CACHE_OL_L2_CACHE_INGESTION_TYPE": lambda: (
         os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_INGESTION_TYPE", "HOT")
         .strip()
@@ -254,8 +286,10 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
             "AIBRIX_KV_CACHE_OL_INFINISTORE_LINK_TYPE", "Ethernet"
         ).strip()
     ),
-    "AIBRIX_KV_CACHE_OL_INFINISTORE_DEV_NAME": lambda: (
-        os.getenv("AIBRIX_KV_CACHE_OL_INFINISTORE_DEV_NAME", "mlx5_0").strip()
+    "AIBRIX_KV_CACHE_OL_INFINISTORE_VISIBLE_DEV_LIST": lambda: (
+        os.getenv("AIBRIX_KV_CACHE_OL_INFINISTORE_VISIBLE_DEV_LIST", "mlx5_0")
+        .strip()
+        .split(",")
     ),
     "AIBRIX_KV_CACHE_OL_INFINISTORE_USE_GDR": lambda: (
         os.getenv("AIBRIX_KV_CACHE_OL_INFINISTORE_USE_GDR", "1").strip().lower()
