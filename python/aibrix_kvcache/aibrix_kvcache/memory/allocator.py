@@ -18,51 +18,22 @@ from typing import List, Sequence, Tuple
 
 import numpy as np
 import torch
-from sortedcontainers import SortedDict, SortedList
+from tqdm.auto import tqdm
 
 from .. import envs
+from ..common.absl_logging import getLogger
 from ..status import Status, StatusCodes
 from ..utils import round_up
 from .ref_counted_obj import RefCountedObj
 
+logger = getLogger(__name__)
+
+try:
+    import aibrix_kvcache._cpu_C  # noqa: F401
+except ImportError as e:
+    logger.warning("Failed to import from aibrix_kvcache._cpu_C with %r", e)
+
 MR_USE_COMPACT_LAYOUT = not envs.AIBRIX_KV_CACHE_OL_TOKEN_VALIDATION_ENABLED
-
-
-@dataclass
-class MemoryRegionIntl:
-    slab: torch.Tensor
-    addr: int
-    length: int
-
-    def data_ptr(self) -> int:
-        return self.slab.data_ptr() + self.addr
-
-    @staticmethod
-    def is_appendable(src: "MemoryRegionIntl", dst: "MemoryRegionIntl") -> bool:
-        """
-        Check if the src MR can be appended to the dst MR.
-        """
-        if src is None or dst is None:
-            return False
-
-        return (
-            src.slab.data_ptr() == dst.slab.data_ptr()
-            and src.addr == dst.addr + dst.length
-        )
-
-    @staticmethod
-    def expand(mr: "MemoryRegionIntl", expand_size: int) -> "MemoryRegionIntl":
-        """Expand the MR by the given size.
-        Args:
-            expand_size (int): The size to be expanded.
-        Returns:
-            The expanded MR.
-        """
-        if mr is None:
-            return mr
-
-        mr.length += expand_size
-        return mr
 
 
 @dataclass
@@ -116,7 +87,8 @@ class MemoryRegion(RefCountedObj):
         self.allocator = allocator
         self.slab = slab
         self.addr = addr
-        self.length = len
+        self.capacity = len
+        self.length = self.capacity
         self._init_meta()
 
     def _init_meta(self) -> None:
@@ -130,19 +102,13 @@ class MemoryRegion(RefCountedObj):
 
     def __repr__(self) -> str:
         return (
-            f"MemoryRegion(addr={self.slab.data_ptr() + self.addr}, "
-            f"length={self.length}, ref={self.ref_count}, "
-            f"sealed={self._is_sealed})"
+            f"MemoryRegion(addr={self.slab.data_ptr() + self.addr},"
+            f" length={self.length}, capacity={self.capacity},"
+            f" ref={self.ref_count}, sealed={self._is_sealed})"
         )
 
     def __str__(self) -> str:
         return self.__repr__()
-
-    def __memoryview__(self) -> memoryview:
-        """Memoryview protocol support"""
-        return memoryview(
-            self.slab[self.addr : self.addr + self.length].numpy().data  # type: ignore
-        )
 
     @property
     def block_nbytes(self) -> int:
@@ -186,13 +152,6 @@ class MemoryRegion(RefCountedObj):
                 f"{actual_length} > {self.length}"
             )
 
-            if actual_length < self.length:
-                # return the rest of the MR
-                self.allocator._finalize_mr(
-                    self.slab,
-                    self.addr + actual_length,
-                    self.length - actual_length,
-                )
             self.length = actual_length
 
         self._is_sealed = True
@@ -214,7 +173,7 @@ class MemoryRegion(RefCountedObj):
 
     def destroy_unsafe(self):
         self._init_meta()
-        self.allocator._finalize_mr(self.slab, self.addr, self.length)
+        self.allocator._finalize_mr(self.slab, self.addr, self.capacity)
 
     def to_tensor(
         self,
@@ -387,15 +346,11 @@ class TensorPoolAllocator:
         self.device: str = "cpu" if device is None else device
         self.pin_memory: bool = pin_memory
 
-        self._mr_list = SortedList([], key=lambda x: x.data_ptr())
-        # Each item is a list of memory regions having the same length
-        self._lookup_table = SortedDict()
-
         self._lock: Lock = Lock()
+        self._original_slabs: List[torch.Tensor] = []
+        self._merged_slabs: List[torch.Tensor] = []
 
-        # Fill slabs
-        self._slabs: List[torch.Tensor] = []
-        self._grow(capacity_nbytes)
+        self._init(capacity_nbytes)
 
     def __len__(self) -> int:
         """Return nbytes allocated by the allocator."""
@@ -414,26 +369,52 @@ class TensorPoolAllocator:
 
     @property
     def slabs(self) -> List[torch.Tensor]:
-        return self._slabs
+        return self._merged_slabs
 
-    def _grow(self, size_nbytes: int) -> None:
+    def _init(self, size_nbytes: int) -> None:
         assert size_nbytes > 0, "size_nbytes must be greater than 0"
         slab_nbytes = self.SLAB_MAX_NBYTES
 
         size_nbytes = round_up(size_nbytes, slab_nbytes)
         nslabs = size_nbytes // slab_nbytes
-        with self._lock:
-            self.capacity_nbytes += nslabs * slab_nbytes
-            for i in range(nslabs):
-                slab = torch.empty(
-                    slab_nbytes,
-                    dtype=torch.uint8,
-                    device=self.device,
-                    pin_memory=self.pin_memory,
+        self.capacity_nbytes += nslabs * slab_nbytes
+
+        for _ in tqdm(range(nslabs), desc="Allocate slabs"):
+            slab = torch.empty(
+                slab_nbytes,
+                dtype=torch.uint8,
+                device=self.device,
+                pin_memory=self.pin_memory,
+            )
+            self._original_slabs.append(slab)
+
+        # sort by memory address
+        self._original_slabs = sorted(
+            self._original_slabs, key=lambda x: x.data_ptr()
+        )
+
+        # merge adjacent slabs
+        self._merged_slabs.append(self._original_slabs[0])
+        for i in range(1, len(self._original_slabs)):
+            slab1 = self._merged_slabs[-1]
+            slab2 = self._original_slabs[i]
+            if slab1.data_ptr() + slab1.numel() == slab2.data_ptr():
+                merged_tensor = torch.as_strided(
+                    slab1,
+                    size=(slab1.numel() + slab2.numel(),),
+                    stride=(1,),
+                    storage_offset=slab1.storage_offset(),
                 )
-                self._slabs.append(slab)
-                self._used_nbytes += slab.numel()
-                self._finalize_mr_unsafe(slab, 0, slab.numel())
+                self._merged_slabs[-1] = merged_tensor
+            else:
+                self._merged_slabs.append(slab2)
+
+        slab_ptr_sizes = [
+            (slab.data_ptr(), slab.numel()) for slab in self._merged_slabs
+        ]
+        self._pool = torch.classes._cpu_C_mem_ops.TensorPool(
+            slab_ptr_sizes, TensorPoolAllocator.SLAB_MAX_NBYTES
+        )
 
     def alloc(
         self, sizes: int | Sequence[int]
@@ -444,185 +425,27 @@ class TensorPoolAllocator:
         if len(sizes) == 0:
             return Status(StatusCodes.INVALID)
 
-        num_mrs = len(sizes)
-        offset = 0
+        slab_idx_offsets = self._pool.allocate(sizes)
+        if len(slab_idx_offsets) == 0:
+            return Status(StatusCodes.OUT_OF_MEMORY)
+
+        mrs: List[MemoryRegion] = []
+        used_nbytes = 0
+        for i, (slab_idx, offset) in enumerate(slab_idx_offsets):
+            mr = MemoryRegion(
+                self, self._merged_slabs[slab_idx], offset, sizes[i]
+            )
+            mrs.append(mr)
+            used_nbytes += mr.length
+            assert mr.length == sizes[i]
+
         with self._lock:
-            mrs: List[MemoryRegion] = []
-            while len(mrs) < num_mrs:
-                status = self._alloc_unsafe(sizes[offset:])
-                if status.is_ok():
-                    value = status.get()
-                    mrs.extend(value)
-                    offset += len(value)
-                else:
-                    if len(mrs) == 0:
-                        return status
-                    return Status.ok(mrs)
-            return Status.ok(mrs)
+            self._used_nbytes += used_nbytes
 
-    def _alloc_unsafe(
-        self, sizes: Sequence[int]
-    ) -> Status[Sequence[MemoryRegion]]:
-        if len(self._lookup_table) == 0:
-            return Status(StatusCodes.OUT_OF_MEMORY)
-
-        upper_bound = sum(sizes)
-        # Find the first length that is greater than or equal to upper_bound
-        idx = self._lookup_table.bisect_left(upper_bound)
-        if idx >= len(self._lookup_table):
-            # Could not find an MR w/ a size >= upper_bound, just use a
-            # smaller one
-            idx -= 1
-
-        target_mr_len = self._lookup_table.keys()[idx]
-        # Check if the length is valid for at least one size
-        if target_mr_len < sizes[0]:
-            return Status(StatusCodes.OUT_OF_MEMORY)
-
-        target_mr_list = self._lookup_table[target_mr_len]
-        # Get the first memory region from the list
-        target_mr = target_mr_list.pop()
-        self._mr_list.discard(target_mr)
-
-        # Remove the list if it is empty
-        if len(target_mr_list) == 0:
-            del self._lookup_table[target_mr_len]
-
-        # Calculate allocated size
-        allocated = 0
-        nmrs = 0
-        for size in sizes:
-            if size > target_mr_len - allocated:
-                break
-            allocated += size
-            nmrs += 1
-
-        # Split the memory region if needed
-        if target_mr_len > allocated:
-            left_over_mr = MemoryRegionIntl(
-                slab=target_mr.slab,
-                addr=target_mr.addr + allocated,
-                length=target_mr.length - allocated,
-            )
-            self._mr_list.add(left_over_mr)
-            self._lookup_table.setdefault(
-                left_over_mr.length, SortedList(key=lambda x: x.data_ptr())
-            ).add(left_over_mr)
-
-        offset = 0
-        mrs = [None] * nmrs
-        for i in range(nmrs):
-            mrs[i] = MemoryRegion(  # type: ignore
-                self, target_mr.slab, target_mr.addr + offset, sizes[i]
-            )
-            offset += sizes[i]
-        self._used_nbytes += allocated
-        return Status.ok(mrs)  # type: ignore
+        return Status.ok(mrs)
 
     def _finalize_mr(self, slab: torch.Tensor, addr: int, length: int) -> None:
-        if length <= 0:
-            return
-
         with self._lock:
-            return self._finalize_mr_unsafe(slab, addr, length)
-
-    def _finalize_mr_unsafe(
-        self, slab: torch.Tensor, addr: int, length: int
-    ) -> None:
-        if length <= 0:
-            return
-
-        mr = MemoryRegionIntl(slab, addr, length)
-        self._used_nbytes -= mr.length
-        assert self._used_nbytes >= 0, "double free memory region"
-        # Find the index of the memory region in the list
-        idx = self._mr_list.bisect_right(mr)
-        prev = self._mr_list[idx - 1] if idx > 0 else None
-        next = self._mr_list[idx] if idx < len(self._mr_list) else None
-
-        curr = mr
-        # 1. append mr to prev if possible
-        if MemoryRegionIntl.is_appendable(curr, prev):
-            # Remove prev from the list and lookup table
-            self._mr_list.discard(prev)
-            prev_len_list = self._lookup_table[prev.length]
-            prev_len_list.discard(prev)
-            # Remove the list if it is empty
-            if len(prev_len_list) == 0:
-                del self._lookup_table[prev.length]
-            # Append curr to prev
-            curr = MemoryRegionIntl.expand(prev, curr.length)
-
-        # curr = prev + mr if append happened
-        # 2. append next to curr if possible
-        if MemoryRegionIntl.is_appendable(next, curr):
-            # Remove next from the list and lookup table
-            self._mr_list.discard(next)
-            next_len_list = self._lookup_table[next.length]
-            next_len_list.discard(next)
-            # Remove the list if it is empty
-            if len(next_len_list) == 0:
-                del self._lookup_table[next.length]
-            # Append next to curr
-            curr = MemoryRegionIntl.expand(curr, next.length)
-
-        # 3. insert curr into the list and lookup table
-        self._mr_list.add(curr)
-        self._lookup_table.setdefault(
-            curr.length, SortedList(key=lambda x: x.data_ptr())
-        ).add(curr)
-
-    @property
-    def num_memory_regions(self) -> int:
-        """Return the number of memory regions."""
-        with self._lock:
-            return len(self._mr_list)
-
-    def assert_consistency(self) -> None:
-        """Assert that the allocator is consistent. For test purpose."""
-        with self._lock:
-            # 1. check mr list
-            mr_list_total_nbytes = 0
-            for i in range(len(self._mr_list)):
-                mr_i = self._mr_list[i]
-                mr_list_total_nbytes += mr_i.length
-                assert mr_i.length > 0, f"{mr_i.length} <= 0"
-                assert mr_i.length in self._lookup_table, (
-                    f"len={mr_i.length} not in lookup_table"
-                )
-                assert mr_i in self._lookup_table[mr_i.length], (
-                    f"{mr_i} not in lookup_table[{mr_i.length}]"
-                )
-                if i > 0:
-                    mr_i_prev = self._mr_list[i - 1]
-                    if (
-                        mr_i_prev.slab.data_ptr()
-                        + mr_i_prev.addr
-                        + mr_i_prev.length
-                        == mr_i.slab.data_ptr() + mr_i.addr
-                    ):
-                        assert mr_i_prev.slab.data_ptr() != mr_i.slab.data_ptr()
-                    else:
-                        assert (
-                            mr_i_prev.slab.data_ptr()
-                            + mr_i_prev.addr
-                            + mr_i_prev.length
-                            < mr_i.slab.data_ptr() + mr_i.addr
-                        ), f"{mr_i_prev} and {mr_i} are not disjoint"
-            assert (
-                mr_list_total_nbytes == self.capacity_nbytes - self._used_nbytes
-            ), (
-                f"{mr_list_total_nbytes} != {self.capacity_nbytes} - "
-                f"{self._used_nbytes}"
-            )
-            # 2. check lookup table
-            lookup_table_total_nbytes = 0
-            for mr_len, mr_list in self._lookup_table.items():
-                assert mr_len > 0, f"{mr_len} <= 0"
-                for mr in mr_list:
-                    assert mr_len == mr.length, f"{mr_len} != {mr.length}"
-                    assert mr in self._mr_list, f"{mr} not in mr_list"
-                lookup_table_total_nbytes += mr_len * len(mr_list)
-            assert lookup_table_total_nbytes == mr_list_total_nbytes, (
-                f"{lookup_table_total_nbytes} != {mr_list_total_nbytes}"
-            )
+            self._used_nbytes -= length
+            assert self._used_nbytes >= 0
+            self._pool.deallocate(slab.data_ptr() + addr)

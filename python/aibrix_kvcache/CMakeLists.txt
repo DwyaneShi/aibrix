@@ -153,6 +153,8 @@ message(STATUS "FetchContent base directory: ${FETCHCONTENT_BASE_DIR}")
 # _C extension
 #
 
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/cpu_extension.cmake)
+
 set(AIBRIX_EXT_SRC
   "csrc/cache_kernels.cu"
   "csrc/torch_bindings.cpp")

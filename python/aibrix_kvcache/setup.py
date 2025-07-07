@@ -505,6 +505,7 @@ def get_requirements() -> list[str]:
 
 
 ext_modules = []
+ext_modules.append(CMakeExtension(name="aibrix_kvcache._cpu_C"))
 
 if _build_custom_ops():
     if _is_cuda():

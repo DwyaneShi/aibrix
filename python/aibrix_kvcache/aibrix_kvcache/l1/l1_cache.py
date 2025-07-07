@@ -121,7 +121,8 @@ class L1Cache(MeasurableBase):
         if self._recorder:
             self._recorder.trace_usage(  # type: ignore[attr-defined]
                 MetricRecorder.Resource.L1_ALLOCATOR,
-                self.allocator._used_nbytes,
+                # self.allocator._used_nbytes,
+                0,
             )
             self._recorder.trace_usage(  # type: ignore[attr-defined]
                 MetricRecorder.Resource.L1_EVICTION_POLICY,
