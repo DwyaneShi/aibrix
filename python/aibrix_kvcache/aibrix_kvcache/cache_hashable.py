@@ -13,12 +13,14 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
-from typing import Sequence
+from typing import Callable, Sequence, Type
 
 import numpy as np
 from farmhash import FarmHash32
 
 from .common import CachedPyObjectBase
+from .contexts import layer_id
+from .utils import hash_combine_128
 
 
 class KVCacheHashable(ABC):
@@ -221,3 +223,54 @@ class TokenCacheKey(BaseKVCacheHashable):
 
     def __len__(self) -> int:
         return len(self._all_tokens)
+
+
+class LayerCacheKey(BaseKVCacheHashable):
+    """
+    A cache key that compounds prefix, tokens, and layer id.
+    Args:
+        prefix (TokenListView | None): The prefix tokens of the kv tensors.
+        tokens (TokenListView): The tokens of the kv tensors.
+        layer_id (int): The layer id of the kv tensors.
+    """
+
+    def __init__(
+        self, prefix: TokenListView | None, tokens: TokenListView, layer_id: int
+    ):
+        super().__init__(prefix, tokens)
+        self.layer_id = layer_id
+
+    def __len__(self) -> int:
+        return len(self._all_tokens)
+
+    def __hash__(self) -> int:
+        return hash_combine_128(self._all_tokens.__hash__(), self.layer_id)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, LayerCacheKey):
+            return False
+        return (
+            self._all_tokens == other._all_tokens
+            and self.layer_id == other.layer_id
+        )
+
+
+def get_cache_key_cls() -> Type[TokenCacheKey] | Callable[..., LayerCacheKey]:
+    """
+    Returns a cache key constructor. If it is within layer_context, returns a
+    LayerCacheKey constructor. Otherwise returns TokenCacheKey.
+
+    Returns:
+        Either TokenCacheKey class or a LayerCacheKey constructor function
+    """
+    layer_id_val = layer_id.get()
+    if layer_id_val >= 0:
+
+        def layer_cache_key_constructor(
+            prefix: TokenListView | None, tokens: TokenListView
+        ) -> LayerCacheKey:
+            return LayerCacheKey(prefix, tokens, layer_id_val)
+
+        return layer_cache_key_constructor
+    else:
+        return TokenCacheKey

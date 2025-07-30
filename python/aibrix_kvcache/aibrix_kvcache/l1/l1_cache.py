@@ -17,8 +17,9 @@ from typing import Iterator, Sequence, Tuple
 
 import torch
 
-from ..cache_hashable import TokenCacheKey, TokenListView
+from ..cache_hashable import TokenListView, get_cache_key_cls
 from ..common.absl_logging import getLogger, log_every_n_seconds
+from ..contexts import layer_id
 from ..memory import ManagedMemoryRegion, MemoryRegion, TensorPoolAllocator
 from ..metrics import L1CacheMetrics, MeasurableBase, MetricRecorder
 from ..profiling import nvtx_range
@@ -60,11 +61,13 @@ class L1Cache(MeasurableBase):
         self.capacity_nbytes: int = capacity_nbytes
         self.allocator: TensorPoolAllocator = allocator
         self.block_spec: KVCacheBlockSpec = block_spec
-        self.block_shape: Tuple[int, ...] = self.block_spec.block_shape
         self.block_dtype: torch.dtype = self.block_spec.block_dtype
         self.block_ntokens: int = self.block_spec.block_ntokens
-        self.block_nbytes: int = self.block_spec.block_nbytes
         self.block_shape_token_dim: int = self.block_spec.block_shape_token_dim
+        self.block_shape_layer_dim: int = self.block_spec.block_shape_layer_dim
+        self._block_nbytes: int = self.block_spec.block_nbytes
+        self._num_layers: int = len(self.block_spec.tensor_spec.layers)
+        self._block_shape: Tuple[int, ...] = self.block_spec.block_shape
 
         self._eviction_policy: BaseEvictionPolicy = BaseEvictionPolicy.create(
             eviction_policy,
@@ -94,6 +97,20 @@ class L1Cache(MeasurableBase):
 
     def __str__(self) -> str:
         return self.__repr__()
+
+    @property
+    def block_nbytes(self) -> int:
+        if layer_id.get() >= 0:
+            return self._block_nbytes // self._num_layers
+        return self._block_nbytes
+
+    @property
+    def block_shape(self) -> Tuple[int, ...]:
+        if layer_id.get() >= 0:
+            shape = list(self._block_shape)
+            shape[self.block_shape_layer_dim] = 1
+            return tuple(shape)
+        return self._block_shape
 
     def set_on_put_callback(self, functor: Functor) -> None:
         """Set the callback function to call when putting new items."""
@@ -158,7 +175,7 @@ class L1Cache(MeasurableBase):
 
         total = 0
         for key in self._cache_block_keys(prefix, tokens):
-            cache_key = TokenCacheKey(*key)
+            cache_key = get_cache_key_cls()(*key)
             if cache_key in self._eviction_policy:
                 total += 1
             else:
@@ -360,7 +377,7 @@ class L1Cache(MeasurableBase):
             if not MemoryRegion.use_compact_layout():
                 block_mr.pack_tokens(prefix=block_prefix, tokens=block_tokens)
             block_mr.seal()
-            block_key = TokenCacheKey(block_prefix, block_tokens)
+            block_key = get_cache_key_cls()(block_prefix, block_tokens)
             if not self._eviction_policy.put(block_key, block_mr).is_ok():
                 break
             bi += 1
@@ -388,7 +405,7 @@ class L1Cache(MeasurableBase):
 
         mrs = []
         for key in self._cache_block_keys(prefix, tokens):
-            status = self._eviction_policy.get(TokenCacheKey(*key))
+            status = self._eviction_policy.get(get_cache_key_cls()(*key))
             if status.is_ok():
                 mrs.append(status.value)
             else:
@@ -412,7 +429,7 @@ class L1Cache(MeasurableBase):
             return Status(StatusCodes.INVALID)
 
         for key in self._cache_block_keys(prefix, tokens):
-            self._eviction_policy.delete(TokenCacheKey(*key))
+            self._eviction_policy.delete(get_cache_key_cls()(*key))
         return Status.ok()
 
     def _cache_block_keys(

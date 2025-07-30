@@ -27,6 +27,7 @@ from .cache_manager import (
     KVCacheManager,
 )
 from .config import KVCacheConfig
+from .contexts import layer_context
 from .metrics import KVCacheMetrics
 from .spec import *
 from .status import Status, StatusCodes
@@ -45,4 +46,5 @@ __all__ = [
     "KVCacheMetrics",
     "Status",
     "StatusCodes",
+    "layer_context",
 ]

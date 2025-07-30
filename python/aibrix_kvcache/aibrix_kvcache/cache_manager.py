@@ -32,9 +32,10 @@ from .cache_handle import (
     KVCacheHandle,
     MemoryRegionKVCacheHandle,
 )
-from .cache_hashable import TokenCacheKey, TokenListView
+from .cache_hashable import BaseKVCacheHashable, LayerCacheKey, TokenListView
 from .common.absl_logging import getLogger, log_every_n_seconds, log_if
 from .config import KVCacheConfig
+from .contexts import layer_context, layer_id
 from .l1 import L1Cache
 from .l2 import KeyBuilder, L2Cache
 from .memory import ManagedMemoryRegion, MemoryRegion, TensorPoolAllocator
@@ -76,11 +77,13 @@ class KVCacheManager(ABC):
         self.block_layout: KVCacheBlockLayout = (
             self.config.block_spec.block_layout
         )
-        self.block_shape: Tuple[int, ...] = self.config.block_spec.block_shape
         self.block_dtype: torch.dtype = self.config.block_spec.block_dtype
         self.block_ntokens: int = self.config.block_spec.block_ntokens
-        self.block_nbytes: int = self.config.block_spec.block_nbytes
         self.block_shape_token_dim: int = self.block_spec.block_shape_token_dim
+        self.block_shape_layer_dim: int = self.block_spec.block_shape_layer_dim
+        self._num_layers: int = len(self.config.block_spec.tensor_spec.layers)
+        self._block_nbytes: int = self.config.block_spec.block_nbytes
+        self._block_shape: Tuple[int, ...] = self.config.block_spec.block_shape
 
     @property
     @abstractmethod
@@ -106,6 +109,22 @@ class KVCacheManager(ABC):
         """Get the chunk size of the kv cache.
         Returns:
             The chunk size of the kv cache.
+        """
+        raise NotImplementedError
+
+    @property
+    def block_nbytes(self) -> int:
+        """Get the block nbytes of the kv cache.
+        Returns:
+            The block nbytes of the kv cache.
+        """
+        raise NotImplementedError
+
+    @property
+    def block_shape(self) -> Tuple[int, ...]:
+        """Get the block shape of the kv cache.
+        Returns:
+            The block shape of the kv cache.
         """
         raise NotImplementedError
 
@@ -546,6 +565,28 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         return self._chunk_size
 
     @property
+    def block_nbytes(self) -> int:
+        """Get the block nbytes of the kv cache.
+        Returns:
+            The block nbytes of the kv cache.
+        """
+        if layer_id.get() >= 0:
+            return self._block_nbytes // self._num_layers
+        return self._block_nbytes
+
+    @property
+    def block_shape(self) -> Tuple[int, ...]:
+        """Get the block shape of the kv cache.
+        Returns:
+            The block shape of the kv cache.
+        """
+        if layer_id.get() >= 0:
+            shape = list(self._block_shape)
+            shape[self.block_shape_layer_dim] = 1
+            return tuple(shape)
+        return self._block_shape
+
+    @property
     def metrics(self) -> KVCacheMetrics:
         assert self._metrics is not None
         return self._metrics
@@ -584,7 +625,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
 
     def _l2_ingestion_callback(
         self,
-        key: TokenCacheKey,
+        key: BaseKVCacheHashable,
         mr: MemoryRegion,
     ) -> Status:
         """Ingestion callback for L2Cache.
@@ -598,7 +639,11 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         prefix = key.prefix
         tokens = key.tokens
         assert len(tokens) == self.block_ntokens
-        return self._l2_put(prefix, tokens, mr)
+        if isinstance(key, LayerCacheKey):
+            with layer_context(key.layer_id):
+                return self._l2_put(prefix, tokens, mr)
+        else:
+            return self._l2_put(prefix, tokens, mr)
 
     def _l2_put(
         self,

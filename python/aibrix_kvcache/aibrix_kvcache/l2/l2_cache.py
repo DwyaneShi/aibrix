@@ -23,6 +23,7 @@ from more_itertools import batched
 from ..cache_handle import KVCacheHandle
 from ..cache_hashable import TokenListView
 from ..common.absl_logging import getLogger, log_every_n_seconds
+from ..contexts import layer_id
 from ..memory import ManagedMemoryRegion, MemoryRegion
 from ..meta_service import MetaService
 from ..metrics import L2CacheMetrics, MeasurableBase, MetricRecorder
@@ -66,11 +67,11 @@ class L2Cache(MeasurableBase):
         super().__init__(metrics)
         self.block_spec: KVCacheBlockSpec = block_spec
         self.block_layout: KVCacheBlockLayout = self.block_spec.block_layout
-        self.block_shape: Tuple[int, ...] = self.block_spec.block_shape
         self.block_dtype: torch.dtype = self.block_spec.block_dtype
         self.block_ntokens: int = self.block_spec.block_ntokens
-        self.block_nbytes: int = self.block_spec.block_nbytes
         self.block_shape_token_dim: int = self.block_spec.block_shape_token_dim
+        self._block_nbytes: int = self.block_spec.block_nbytes
+        self._num_layers: int = len(self.block_spec.tensor_spec.layers)
         self.key_builder: KeyBuilder = key_builder or RawKeyBuilder(
             self.block_ntokens
         )
@@ -131,6 +132,12 @@ class L2Cache(MeasurableBase):
     def __del__(self) -> None:
         self.close()
         logger.info("%s is closed.", str(self))
+
+    @property
+    def block_nbytes(self) -> int:
+        if layer_id.get() >= 0:
+            return self._block_nbytes // self._num_layers
+        return self._block_nbytes
 
     def open(self) -> Status:
         """Open the cache."""
@@ -639,7 +646,13 @@ class L2Cache(MeasurableBase):
         Returns:
             The cache block keys of the kv tensors.
         """
-        return iter(self.key_builder.build(prefix, tokens))
+        layer_id_val = layer_id.get()
+        if layer_id_val >= 0:
+            # append layer_id to cache keys
+            for real_key, cache_key in self.key_builder.build(prefix, tokens):
+                yield real_key, cache_key + layer_id_val.to_bytes(16)
+        else:
+            yield from iter(self.key_builder.build(prefix, tokens))
 
     def _cache_block_key_batches(
         self, prefix: TokenListView | None, tokens: TokenListView

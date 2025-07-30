@@ -120,9 +120,12 @@ class KVCacheBlockSpec:
             self.engine_block_ntokens
         )
         self.block_shape_token_dim: int = 0
+        self.block_shape_layer_dim: int = 0
         if self.block_layout == KVCacheBlockLayout.NCLD:
             self.block_shape_token_dim = 0
+            self.block_shape_layer_dim = 2
         else:
+            self.block_shape_layer_dim = 0
             self.block_shape_token_dim = 2
 
     def _get_block_shape(self, block_ntokens: int) -> Tuple[int, ...]:
