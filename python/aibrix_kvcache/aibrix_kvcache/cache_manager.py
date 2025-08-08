@@ -452,6 +452,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
                 self._allocator,
                 self.block_spec,
                 metrics=self._metrics.l1,
+                multi_threaded=self.config.multi_threaded,
             )
 
         if enable_l2:

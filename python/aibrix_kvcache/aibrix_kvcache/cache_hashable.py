@@ -255,6 +255,9 @@ class LayerCacheKey(BaseKVCacheHashable):
         )
 
 
+_CACHE_KEY_CLS: Type[TokenCacheKey] | Callable[..., LayerCacheKey] | None = None
+
+
 def get_cache_key_cls() -> Type[TokenCacheKey] | Callable[..., LayerCacheKey]:
     """
     Returns a cache key constructor. If it is within layer_context, returns a
@@ -263,6 +266,10 @@ def get_cache_key_cls() -> Type[TokenCacheKey] | Callable[..., LayerCacheKey]:
     Returns:
         Either TokenCacheKey class or a LayerCacheKey constructor function
     """
+    global _CACHE_KEY_CLS
+    if _CACHE_KEY_CLS is not None:
+        return _CACHE_KEY_CLS
+
     layer_id_val = layer_id.get()
     if layer_id_val >= 0:
 
@@ -271,6 +278,8 @@ def get_cache_key_cls() -> Type[TokenCacheKey] | Callable[..., LayerCacheKey]:
         ) -> LayerCacheKey:
             return LayerCacheKey(prefix, tokens, layer_id_val)
 
+        _CACHE_KEY_CLS = layer_cache_key_constructor
         return layer_cache_key_constructor
     else:
+        _CACHE_KEY_CLS = TokenCacheKey
         return TokenCacheKey
