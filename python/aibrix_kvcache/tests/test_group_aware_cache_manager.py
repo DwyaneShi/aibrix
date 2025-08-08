@@ -130,7 +130,7 @@ def cache_conf(rank: int, world_size: int, layout: KVCacheBlockLayout):
     cache = None
     try:
         shape, spec = my_get_cache_conf(rank, world_size, layout)
-        config = KVCacheConfig(block_spec=spec, model_spec=ModelSpec(1024))
+        config = KVCacheConfig(block_spec=spec, model_spec=ModelSpec(1024, 512))
         cache = GroupAwareKVCacheManager(
             config=config, process_group=dist.group.WORLD
         )

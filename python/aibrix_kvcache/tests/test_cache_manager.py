@@ -92,7 +92,7 @@ def cache_mgr_fixture(cache_conf_fixture, request):
 
     cache = None
     try:
-        config = KVCacheConfig(block_spec=spec, model_spec=ModelSpec(1024))
+        config = KVCacheConfig(block_spec=spec, model_spec=ModelSpec(1024, 512))
         # use a small slab size for testing
         TensorPoolAllocator.SLAB_MAX_NBYTES = spec.block_nbytes * 8
         cache = BaseKVCacheManager(config=config)
@@ -434,7 +434,7 @@ def gdr_cache_mgr_fixture(request):
 
     cache = None
     try:
-        config = KVCacheConfig(block_spec=spec, model_spec=ModelSpec(1024))
+        config = KVCacheConfig(block_spec=spec, model_spec=ModelSpec(1024, 512))
         # use a small slab size for testing
         TensorPoolAllocator.SLAB_MAX_NBYTES = spec.block_nbytes * 8
         cache = BaseKVCacheManager(config=config)
