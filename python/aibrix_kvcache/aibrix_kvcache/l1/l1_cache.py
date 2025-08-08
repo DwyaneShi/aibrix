@@ -18,6 +18,7 @@ from typing import Iterator, Sequence, Tuple
 import torch
 
 from ..cache_hashable import KVCacheKey, KVCacheKeyTypes
+from ..common import ConditionalLock
 from ..common.absl_logging import getLogger, log_every_n_seconds
 from ..memory import ManagedMemoryRegion, MemoryRegion, TensorPoolAllocator
 from ..metrics import L1CacheMetrics, MeasurableBase, MetricRecorder
@@ -41,6 +42,7 @@ class L1Cache(MeasurableBase):
         on_evict: Functor | None = None,
         on_hot_access: Functor | None = None,
         metrics: L1CacheMetrics | None = None,
+        multi_threaded: bool = False,
     ) -> None:
         """Create a cache object.
         Args:
@@ -55,6 +57,7 @@ class L1Cache(MeasurableBase):
             on_hot_access(Functor): The callback function to call when a
                                     cache item becomes hot. Defaults to None.
             metrics (L1CacheMetrics): The metrics of the cache.
+            multi_threaded (bool): Whether to use multi-threaded kv cache.
         """
         super().__init__(metrics)
         self.capacity_nbytes: int = capacity_nbytes
@@ -65,6 +68,8 @@ class L1Cache(MeasurableBase):
         self.block_ntokens: int = self.block_spec.block_ntokens
         self.block_nbytes: int = self.block_spec.block_nbytes
         self.block_shape_token_dim: int = self.block_spec.block_shape_token_dim
+        self._meta_lock = ConditionalLock(multi_threaded)
+        self._policy_lock = ConditionalLock(multi_threaded)
 
         self._eviction_policy: BaseEvictionPolicy = BaseEvictionPolicy.create(
             eviction_policy,
@@ -119,21 +124,25 @@ class L1Cache(MeasurableBase):
             The memory regions.
         """
         if self._recorder:
-            self._recorder.trace_usage(  # type: ignore[attr-defined]
-                MetricRecorder.Resource.L1_ALLOCATOR,
-                self.allocator._used_nbytes,
-            )
-            self._recorder.trace_usage(  # type: ignore[attr-defined]
-                MetricRecorder.Resource.L1_EVICTION_POLICY,
-                len(self._eviction_policy),
-            )
+            with self._meta_lock:
+                self._recorder.trace_usage(  # type: ignore[attr-defined]
+                    MetricRecorder.Resource.L1_ALLOCATOR,
+                    self.allocator._used_nbytes,
+                )
+                self._recorder.trace_usage(  # type: ignore[attr-defined]
+                    MetricRecorder.Resource.L1_EVICTION_POLICY,
+                    len(self._eviction_policy),
+                )
 
         total = sum(sizes)
 
         status = self.allocator.alloc(sizes)
-        while status.is_out_of_memory() and len(self) > 0:
-            self._eviction_policy.evict(total)
-            status = self.allocator.alloc(sizes)
+        if status.is_out_of_memory():
+            # Only acquire the lock if we need to re-allocate
+            with self._policy_lock:
+                while status.is_out_of_memory() and len(self) > 0:
+                    self._eviction_policy.evict(total)
+                    status = self.allocator.alloc(sizes)
 
         return Status(status)
 
@@ -157,12 +166,13 @@ class L1Cache(MeasurableBase):
             return Status(StatusCodes.INVALID)
 
         total = 0
-        for key in self._cache_block_keys(prefix, query):
-            cache_key = KVCacheKey(*key)
-            if cache_key in self._eviction_policy:
-                total += 1
-            else:
-                break
+        with self._policy_lock:
+            for key in self._cache_block_keys(prefix, query):
+                cache_key = KVCacheKey(*key)
+                if cache_key in self._eviction_policy:
+                    total += 1
+                else:
+                    break
         return Status.ok(total) if total > 0 else Status(StatusCodes.NOT_FOUND)
 
     @nvtx_range("put", "kv_cache_ol.L1Cache")
@@ -361,8 +371,9 @@ class L1Cache(MeasurableBase):
                 block_mr.pack_tokens(prefix=block_prefix, query=block_query)
             block_mr.seal()
             block_key = KVCacheKey(block_prefix, block_query)
-            if not self._eviction_policy.put(block_key, block_mr).is_ok():
-                break
+            with self._policy_lock:
+                if not self._eviction_policy.put(block_key, block_mr).is_ok():
+                    break
             bi += 1
 
         return Status.ok(bi)
@@ -387,12 +398,13 @@ class L1Cache(MeasurableBase):
             return Status(StatusCodes.INVALID)
 
         mrs = []
-        for key in self._cache_block_keys(prefix, query):
-            status = self._eviction_policy.get(KVCacheKey(*key))
-            if status.is_ok():
-                mrs.append(status.value)
-            else:
-                break
+        with self._policy_lock:
+            for key in self._cache_block_keys(prefix, query):
+                status = self._eviction_policy.get(KVCacheKey(*key))
+                if status.is_ok():
+                    mrs.append(status.value)
+                else:
+                    break
 
         if len(mrs) == 0:
             return Status(StatusCodes.NOT_FOUND)
@@ -411,8 +423,9 @@ class L1Cache(MeasurableBase):
         if prefix is not None and len(prefix) % self.block_ntokens != 0:
             return Status(StatusCodes.INVALID)
 
-        for key in self._cache_block_keys(prefix, query):
-            self._eviction_policy.delete(KVCacheKey(*key))
+        with self._policy_lock:
+            for key in self._cache_block_keys(prefix, query):
+                self._eviction_policy.delete(KVCacheKey(*key))
         return Status.ok()
 
     def _cache_block_keys(

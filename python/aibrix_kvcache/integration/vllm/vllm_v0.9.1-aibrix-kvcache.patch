@@ -6155,10 +6155,10 @@ index 58dfa251c..40f86449f 100644
 +    ".aibrix_offloading_connector_type3", "AIBrixOffloadingConnector")
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/aibrix_offloading_connector_type1.py b/vllm/distributed/kv_transfer/kv_connector/v1/aibrix_offloading_connector_type1.py
 new file mode 100644
-index 000000000..b987fd769
+index 000000000..9cce14e18
 --- /dev/null
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/aibrix_offloading_connector_type1.py
-@@ -0,0 +1,1400 @@
+@@ -0,0 +1,1406 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +import enum
@@ -6629,6 +6629,8 @@ index 000000000..b987fd769
 +        self.requests = requests
 +        self.finished_requests_ids: set[str] = set()
 +        self.total_num_scheduled_tokens: int = 0
++        self.side_channel_host: str = ""
++        self.side_channel_port: int = -1
 +
 +    def __getitem__(self,
 +                    key: str) -> AIBrixOffloadingConnectorRequestMetadata:
@@ -6842,6 +6844,7 @@ index 000000000..b987fd769
 +        config: "VllmConfig",
 +        max_num_batched_tokens: int = -1,
 +        tp_aware: bool = True,
++        multi_threaded: bool = False,
 +    ):
 +        cache_config = config.cache_config
 +        model_config = config.model_config
@@ -6890,6 +6893,7 @@ index 000000000..b987fd769
 +                model_config.max_model_len,
 +                max_num_batched_tokens,
 +            ),
++            multi_threaded=multi_threaded,
 +        )
 +
 +        self.kv_group: dist.ProcessGroup | None = None
@@ -6940,7 +6944,9 @@ index 000000000..b987fd769
 +                self.cache = BaseKVCacheManager(config=kv_config)
 +                self.kv_group = kv_group.cpu_group
 +                self._coll_tensor = torch.empty(
-+                    (config.scheduler_config.max_num_seqs), dtype=torch.int32)
++                    (config.scheduler_config.max_num_seqs * 3),
++                    dtype=torch.int32,
++                )
 +            else:
 +                raise ValueError(
 +                    f"Unknown sync granularity {sync_granularity}")
@@ -8308,23 +8314,26 @@ index 000000000..3a6f2dddf
 +        pass
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/aibrix_offloading_connector_type3.py b/vllm/distributed/kv_transfer/kv_connector/v1/aibrix_offloading_connector_type3.py
 new file mode 100644
-index 000000000..252eed16e
+index 000000000..45d600930
 --- /dev/null
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/aibrix_offloading_connector_type3.py
-@@ -0,0 +1,1279 @@
+@@ -0,0 +1,1615 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +import asyncio
 +import contextlib
 +import logging
++import queue
 +import threading
 +import time
 +from typing import TYPE_CHECKING, Any, Optional
 +
 +import aibrix_kvcache.envs
++import msgspec
 +import torch
 +import torch.distributed as dist
-+from aibrix_kvcache import KVCacheBlockLayout, KVCacheHandle
++import zmq
++from aibrix_kvcache import KVCacheBlockLayout, KVCacheHandle, TokenListView
 +from aibrix_kvcache._custom_ops import (reshape_and_cache_multi_layer,
 +                                        reshape_and_offload_multi_layer)
 +from aibrix_kvcache.common.absl_logging import (getLogger, log_every_n_seconds,
@@ -8338,7 +8347,8 @@ index 000000000..252eed16e
 +# from vllm.v1.attention.backends.triton_attn import TritonAttentionBackend
 +from vllm.distributed.kv_transfer.kv_connector.v1.base import (
 +    KVConnectorBase_V1, KVConnectorMetadata, KVConnectorRole)
-+from vllm.utils import round_down, round_up
++from vllm.utils import (get_ip, make_zmq_path, make_zmq_socket, round_down,
++                        round_up)
 +from vllm.v1.attention.backends.flash_attn import FlashAttentionBackend
 +
 +from .aibrix_offloading_connector_type1 import (
@@ -8365,6 +8375,33 @@ index 000000000..252eed16e
 +OFFLOADING_CONNECTOR_SUPPORTED_ATTN_BACKENDS = {
 +    FlashAttentionBackend.get_name(): KVCacheBlockLayout.LCND,
 +}
++OFFLOADING_CONNECTOR_TIMEOUT_S = 0.1
++
++
++class AIBrixOffloadingConnectorWorkerMeta(
++        msgspec.Struct,
++        omit_defaults=True,  # type: ignore[call-arg]
++        # required for @cached_property.
++        dict=True):
++    tp_rank: int
++
++
++class AIBrixOffloadingConnectorTestRequest(
++        msgspec.Struct,
++        omit_defaults=True,  # type: ignore[call-arg]
++        # required for @cached_property.
++        dict=True):
++    req_id: str
++    seq_token_ids: list[int]
++
++
++class AIBrixOffloadingConnectorTestResponse(
++        msgspec.Struct,
++        omit_defaults=True,  # type: ignore[call-arg]
++        # required for @cached_property.
++        dict=True):
++    req_id: str
++    seq_existing_len: int
 +
 +
 +class AIBrixOffloadingConnectorScheduler(
@@ -8372,11 +8409,118 @@ index 000000000..252eed16e
 +
 +    def __init__(self, config: "VllmConfig"):
 +        super().__init__(config)
++
++        if config.parallel_config.data_parallel_backend == "ray":
++            sched_ip = get_ip()
++        else:
++            sched_ip = config.parallel_config.data_parallel_master_ip
++
++        self.tp_size = config.parallel_config.tensor_parallel_size
++        self.side_channel_host = sched_ip
++        self.side_channel_port = (vllm.envs.VLLM_AIBRIX_SIDE_CHANNEL_PORT +
++                                  config.parallel_config.data_parallel_rank)
++        self.dp_rank = config.parallel_config.data_parallel_rank
++
 +        self._alloc_block_ids: dict[str, list[int]] = {}
 +        self.cache_block_ntokens = \
 +            aibrix_kvcache.envs.AIBRIX_KV_CACHE_OL_BLOCK_SIZE
 +        if self.cache_block_ntokens < 0:
 +            self.cache_block_ntokens = self.engine_block_ntokens
++
++        self._testing_requests: dict[str, int] = {}
++        self._pending_requests: list[Request] = []
++        self._testing_result_queue = queue.Queue()
++
++        # init side channels
++        self._zmq_ctx = zmq.Context()
++
++        self._sidechannel_path = make_zmq_path(
++            "tcp",
++            self.side_channel_host,
++            self.side_channel_port,
++        )
++        self._sidechannel_sock = make_zmq_socket(
++            ctx=self._zmq_ctx,
++            path=self._sidechannel_path,
++            socket_type=zmq.ROUTER,
++            bind=True,
++        )
++
++        self._worker_identities: dict[int, Any] = {}
++        self._handshake_listener_thread = threading.Thread(
++            target=self._handshake_listener,
++            args=(),
++            daemon=True,
++            name="sched_sidechannel")
++        self._handshake_listener_thread.start()
++        self._sidechannels_ready = False
++
++    def __del__(self):
++        if hasattr(self, "_zmq_ctx") and self._zmq_ctx is not None:
++            self._zmq_ctx.destroy(linger=0)
++
++    def _handshake_listener(self):
++        logger.debug("Starting listening on path: %s", self._sidechannel_path)
++        decoder = msgspec.msgpack.Decoder(AIBrixOffloadingConnectorWorkerMeta)
++        while True:
++            identity, _, msg = self._sidechannel_sock.recv_multipart()
++            metadata = decoder.decode(msg)
++            worker_tp_rank = metadata.tp_rank
++            if 0 <= worker_tp_rank < self.tp_size:
++                if worker_tp_rank in self._worker_identities:
++                    logger.warning("Got duplicated worker tp rank: %s",
++                                   worker_tp_rank)
++                else:
++                    logger.info(
++                        "Worker %d in DP group %d has established side "
++                        "channel",
++                        worker_tp_rank,
++                        self.dp_rank,
++                    )
++                self._worker_identities[worker_tp_rank] = identity
++            else:
++                logger.error("Got invalid worker tp rank: %s", worker_tp_rank)
++
++            if len(self._worker_identities) == self.tp_size:
++                logger.info(
++                    "Side channels for all workers in DP group %d have "
++                    "been established",
++                    self.dp_rank,
++                )
++                break
++            else:
++                logger.info(
++                    "Established %d side channels for DP group %d",
++                    len(self._worker_identities),
++                    self.dp_rank,
++                )
++
++        # start polling
++        self._sidechannel_run()
++
++    def _sidechannel_run(self):
++        logger.debug(
++            "Starting scheduler side channel on path: %s",
++            self._sidechannel_path,
++        )
++        decoder = msgspec.msgpack.Decoder(
++            list[AIBrixOffloadingConnectorTestResponse])
++        poller = zmq.Poller()
++        poller.register(self._sidechannel_sock, zmq.POLLIN)
++        while True:
++            for sock, _ in poller.poll():
++                id, _, msg = sock.recv_multipart()
++                responses = decoder.decode(msg)
++                for response in responses:
++                    seq_existing_len = response.seq_existing_len
++                    logger.debug(
++                        "Test Request[id=%s] %s returns %d",
++                        response.req_id,
++                        id.hex(),
++                        seq_existing_len,
++                    )
++                    self._testing_result_queue.put(
++                        (response.req_id, seq_existing_len))
 +
 +    def update_state_after_alloc(self, request: "Request",
 +                                 blocks: "KVCacheBlocks",
@@ -8391,7 +8535,7 @@ index 000000000..252eed16e
 +        (block_ids, ) = blocks.get_block_ids()
 +        self._alloc_block_ids.setdefault(req_id, []).extend(block_ids)
 +
-+    def get_num_prefetch_tokens(
++    def load_and_prefetch(
 +        self,
 +        request: "Request",
 +        num_to_load_tokens: int,
@@ -8466,6 +8610,86 @@ index 000000000..252eed16e
 +            state=AIBrixOffloadingConnectorRequestState.WAITING_FOR_RECV,
 +        )
 +        return query_len
++
++    def add_requests(
++        self,
++        requests: list["Request"],
++    ) -> None:
++        self._pending_requests.extend(requests)
++        self._send_test_requests()
++
++    def test_request(
++        self,
++        request: "Request",
++    ) -> bool:
++        if not self._sidechannels_ready:
++            return False
++        if len(self._pending_requests) > 0:
++            self._send_test_requests()
++
++        req_id = request.request_id
++        if req_id not in self._testing_requests:
++            return False
++
++        while self._testing_requests[req_id] == -1:
++            try:
++                (seq_req_id,
++                 seq_existing_len) = self._testing_result_queue.get(
++                     timeout=OFFLOADING_CONNECTOR_TIMEOUT_S)
++            except Exception:
++                self._testing_requests.pop(req_id, None)
++                return False
++            if seq_req_id in self._testing_requests:
++                self._testing_requests[seq_req_id] = seq_existing_len
++
++        return self._testing_requests[req_id] > 0
++
++    def _send_test_requests(self) -> None:
++        # side channels are not ready, return
++        if not self._sidechannels_ready:
++            return
++
++        num_to_test_tokens = (OFFLOADING_CONNECTOR_SKIP_THRESHOLD *
++                              self.engine_block_ntokens)
++
++        test_requests: list[AIBrixOffloadingConnectorTestRequest] = []
++        for request in self._pending_requests:
++            req_id = request.request_id
++            if req_id in self._testing_requests:
++                continue
++
++            prompt_len = len(request.prompt_token_ids)
++            if prompt_len < num_to_test_tokens:
++                logger.debug(
++                    "Skip testing Request[id=%s, prompt_len=%d]: too short",
++                    req_id,
++                    prompt_len,
++                )
++                self._testing_requests[req_id] = 0
++                continue
++
++            logger.debug(
++                "Test Request[id=%s, prompt_len=%d]",
++                req_id,
++                prompt_len,
++            )
++
++            seq_token_ids = request.prompt_token_ids[:num_to_test_tokens]
++            test = AIBrixOffloadingConnectorTestRequest(
++                req_id,
++                seq_token_ids=seq_token_ids,
++            )
++            self._testing_requests[req_id] = -1
++            test_requests.append(test)
++
++        encoder = msgspec.msgpack.Encoder()
++        encoded_data = encoder.encode(test_requests)
++        # only test requests on worker-0 to alleviate comm overhead
++        id0 = self._worker_identities[0]
++        self._sidechannel_sock.send_multipart((id0, b"", encoded_data))
++
++        # clear pending requests
++        self._pending_requests.clear()
 +
 +    def build_connector_meta(
 +            self, scheduler_output: "SchedulerOutput") -> KVConnectorMetadata:
@@ -8583,8 +8807,16 @@ index 000000000..252eed16e
 +        meta.total_num_scheduled_tokens = \
 +            scheduler_output.total_num_scheduled_tokens
 +
++        # 7. side channel host and port
++        if not self._sidechannels_ready:
++            meta.side_channel_host = self.side_channel_host
++            meta.side_channel_port = self.side_channel_port
++            self._sidechannels_ready = True
++        else:
++            meta.side_channel_host = ""
++
++        logger.debug("SCHEDULER: build_connector_meta, meta=%s", meta)
 +        if len(meta.requests) > 0 or len(meta.finished_requests_ids) > 0:
-+            logger.debug("SCHEDULER: build_connector_meta, meta=%s", meta)
 +            logger.debug(
 +                "Num. of scheduled requests: %s",
 +                len(
@@ -8602,6 +8834,7 @@ index 000000000..252eed16e
 +    ) -> tuple[bool, Optional[dict[str, Any]]]:
 +        req_id = request.request_id
 +        self._alloc_block_ids.pop(req_id, None)
++        self._testing_requests.pop(req_id, None)
 +        return super().request_finished(request, block_ids)
 +
 +    def request_preempted(
@@ -8624,7 +8857,9 @@ index 000000000..252eed16e
 +            config,
 +            max_num_batched_tokens=config.scheduler_config.
 +            max_num_batched_tokens,
++            multi_threaded=True,
 +        )
++        self.dp_rank = config.parallel_config.data_parallel_rank
 +        # create streams on current device that are dedicated for sends and
 +        # recvs
 +        self._send_stream = torch.cuda.Stream()
@@ -8651,6 +8886,13 @@ index 000000000..252eed16e
 +        self._acquired_kvcache_handles: dict[str, list[KVCacheHandle]] = {}
 +        self._prefetch_future: asyncio.Future | None = None
 +
++        # side channel
++        self._zmq_ctx = zmq.Context()
++        self._sidechannel_path: Optional[str] = None
++        self._sidechannel_sock: Optional[zmq.Socket
++                                         | zmq.asyncio.Socket] = None
++        self._sidechannel_thread: Optional[threading.Thread] = None
++
 +    def __del__(self):
 +        self._destroy_event_loop(
 +            self._kv_event_loop,
@@ -8658,6 +8900,14 @@ index 000000000..252eed16e
 +        )
 +        del self._kv_event_loop
 +        del self._kv_thread
++
++        if (hasattr(self, "_sidechannel_thread")
++                and self._sidechannel_thread is not None
++                and self._sidechannel_thread.is_alive()):
++            self._sidechannel_thread.join()
++
++        if hasattr(self, "_zmq_ctx") and self._zmq_ctx is not None:
++            self._zmq_ctx.destroy(linger=0)
 +
 +    def _create_event_loop(self) \
 +        -> tuple[asyncio.AbstractEventLoop, threading.Thread]:
@@ -8723,6 +8973,10 @@ index 000000000..252eed16e
 +        self,
 +        metadata: AIBrixOffloadingConnectorMetadata,
 +    ) -> None:
++        if (metadata.side_channel_host is not None
++                and len(metadata.side_channel_host) > 0):
++            self._handshake(metadata)
++
 +        if len(metadata) == 0 and len(metadata.finished_requests_ids) == 0:
 +            return
 +
@@ -8777,8 +9031,60 @@ index 000000000..252eed16e
 +            )
 +
 +        if len(self._load_reqs) > 0:
-+            disable_layer_wise = metadata.total_num_scheduled_tokens == 0
-+            self._start_load_kv(self._load_reqs, disable_layer_wise)
++            self._start_load_kv(self._load_reqs)
++
++    def _handshake(self, metadata: AIBrixOffloadingConnectorMetadata):
++        self._sidechannel_path = make_zmq_path("tcp",
++                                               metadata.side_channel_host,
++                                               metadata.side_channel_port)
++        self._sidechannel_sock = make_zmq_socket(
++            ctx=self._zmq_ctx,
++            path=self._sidechannel_path,
++            socket_type=zmq.REQ,
++            bind=False,
++        )
++        metadata = AIBrixOffloadingConnectorWorkerMeta(tp_rank=self.rank, )
++        encoder = msgspec.msgpack.Encoder()
++        encoded_data = encoder.encode(metadata)
++        self._sidechannel_sock.send(encoded_data)
++        logger.info(
++            "Worker %d in DP group %d is establishing side channel",
++            self.rank,
++            self.dp_rank,
++        )
++
++        # init side channel
++        self._sidechannel_thread = threading.Thread(
++            target=self._sidechannel_run,
++            args=(),
++            daemon=True,
++            name="worker_sidechannel_run")
++        self._sidechannel_thread.start()
++
++    def _sidechannel_run(self):
++        logger.debug(
++            "Starting worker side channel on path: %s",
++            self._sidechannel_path,
++        )
++        encoder = msgspec.msgpack.Encoder()
++        decoder = msgspec.msgpack.Decoder(
++            list[AIBrixOffloadingConnectorTestRequest])
++        poller = zmq.Poller()
++        poller.register(self._sidechannel_sock, zmq.POLLIN)
++        while True:
++            for sock, _ in poller.poll():
++                msg = sock.recv()
++                requests = decoder.decode(msg)
++                responses: list[AIBrixOffloadingConnectorTestResponse] = []
++                for request in requests:
++                    seq_existing_len = self._test_kv_impl(request)
++                    response = AIBrixOffloadingConnectorTestResponse(
++                        req_id=request.req_id,
++                        seq_existing_len=seq_existing_len,
++                    )
++                    responses.append(response)
++                encoded_data = encoder.encode(responses)
++                sock.send(encoded_data)
 +
 +    async def _start_prefetch_kv_async(
 +        self, prefetch_reqs: list[AIBrixOffloadingConnectorRequestMetadata]
@@ -8815,9 +9121,9 @@ index 000000000..252eed16e
 +                        stats[seq_request_id][1].release()
 +                        stats.pop(seq_request_id, None)
 +
-+        for seq_request_meta in prefetch_reqs:
-+            seq_request_id = seq_request_meta.req_id
-+            if self.kv_group is None:
++        else:
++            for seq_request_meta in prefetch_reqs:
++                seq_request_id = seq_request_meta.req_id
 +                num_fetched_tokens, handle = \
 +                    self._recv_kv_impl(seq_request_meta)
 +                if num_fetched_tokens > 0:
@@ -8899,10 +9205,39 @@ index 000000000..252eed16e
 +
 +        return seq_recv_len, handle
 +
++    def _test_kv_impl(
++        self,
++        request: AIBrixOffloadingConnectorTestRequest,
++    ) -> int:
++        logger.debug("_test_kv_impl: %s", request)
++        seq_request_id = request.req_id
++        if (request.seq_token_ids is None or len(request.seq_token_ids) == 0):
++            return 0
++
++        prefix = None
++        tokens = TokenListView(request.seq_token_ids)
++
++        status = self.cache.exists(prefix, tokens)
++
++        if not status.is_ok():
++            return 0
++
++        seq_existing_len = status.value
++
++        log_if(
++            logger,
++            logging.DEBUG,
++            "Request[id=%s] exists %d tokens",
++            seq_existing_len > 0,
++            seq_request_id,
++            seq_existing_len,
++        )
++
++        return seq_existing_len
++
 +    def _start_load_kv(
 +        self,
 +        load_reqs: list[AIBrixOffloadingConnectorRequestMetadata],
-+        disable_layer_wise: bool,
 +    ):
 +        logger.debug("Start non-layer-wise loading %s", load_reqs)
 +        self._start_load_kv_impl(load_reqs)
@@ -9132,22 +9467,13 @@ index 000000000..252eed16e
 +            # wait for send stream to finish
 +            self._send_stream.synchronize()
 +
-+        if len(self._send_reqs) > 0:
-+            asyncio.run_coroutine_threadsafe(
-+                self._send_kv_async(self._send_reqs),
-+                self._kv_event_loop,
-+            ).result()
++        for req in self._send_reqs:
++            self._send_kv_impl(req)
 +
 +        self._send_reqs.clear()
 +
 +        # release all allocated handles
 +        self._release_allocated_kvcache_handles()
-+
-+    async def _send_kv_async(
-+            self, send_reqs: list[AIBrixOffloadingConnectorRequestMetadata]):
-+        logger.debug("_send_kv_async %s", send_reqs)
-+        for req in send_reqs:
-+            self._send_kv_impl(req)
 +
 +    def _send_kv_impl(
 +        self,
@@ -9310,6 +9636,8 @@ index 000000000..252eed16e
 +                    self._acquired_kvcache_handles.setdefault(req_id, [])\
 +                        .append(handle)
 +                    prefetch_output.add((req_id, num_fetched_tokens))
++                elif num_fetched_tokens > 0:
++                    prefetch_output.add((req_id, num_fetched_tokens))
 +                else:
 +                    prefetch_output.add((req_id, 0))
 +            self._prefetch_future = None
@@ -9368,20 +9696,6 @@ index 000000000..252eed16e
 +            dictionary of layer names, kv cache
 +        """
 +        pass
-+
-+    def start_load_kv_before_update(self, **kwargs) -> dict[str, int]:
-+        """
-+        Start loading the KV cache from the connector to vLLM's paged
-+        KV buffer before gpu runner updating its states.
-+
-+        Args:
-+            **kwargs: additional arguments for the load operation
-+
-+        Returns:
-+            dict[str, int]: a dictionary of request ids and the number of
-+            tokens loaded for each request.
-+        """
-+        return {}
 +
 +    def start_load_kv(self, forward_context: "ForwardContext",
 +                      **kwargs) -> None:
@@ -9530,7 +9844,7 @@ index 000000000..252eed16e
 +        return
 +
 +    @delegate_to("connector_scheduler")
-+    def get_num_prefetch_tokens(
++    def load_and_prefetch(
 +        self,
 +        request: "Request",
 +        num_to_load_tokens: int,
@@ -9549,6 +9863,34 @@ index 000000000..252eed16e
 +            Num of tokens to prefetch.
 +        """
 +        return 0
++
++    @delegate_to("connector_scheduler")
++    def add_requests(
++        self,
++        requests: list["Request"],
++    ) -> None:
++        """
++        Add requests.
++
++        Args:
++            requests (list[Request]): list of request objects.
++        """
++        return
++
++    @delegate_to("connector_scheduler")
++    def test_request(
++        self,
++        request: "Request",
++    ) -> bool:
++        """
++        Test if request has matched tokens.
++
++        Args:
++            request (Request): the request object.
++        Returns:
++            True if the request has matched tokens.
++        """
++        return False
 +
 +    @delegate_to("connector_scheduler")
 +    def build_connector_meta(
@@ -9990,22 +10332,27 @@ index 9375dc4c4..bdb8e9e6f 100644
  
  class StatLoggerBase(ABC):
 diff --git a/vllm/envs.py b/vllm/envs.py
-index 80c5f289b..addd61da1 100644
+index 80c5f289b..a525b0894 100644
 --- a/vllm/envs.py
 +++ b/vllm/envs.py
-@@ -127,6 +127,8 @@ if TYPE_CHECKING:
+@@ -127,6 +127,9 @@ if TYPE_CHECKING:
      VLLM_TOOL_PARSE_REGEX_TIMEOUT_SECONDS: int = 1
      VLLM_SLEEP_WHEN_IDLE: bool = False
      VLLM_MQ_MAX_CHUNK_BYTES_MB: int = 16
++    VLLM_AIBRIX_SIDE_CHANNEL_PORT: int = 6667
 +    VLLM_AIBRIX_SYNC_GRANULARITY: str = "PER_OP"
 +    VLLM_AIBRIX_TYPE3_USE_LAYER_WISE_SAVE: bool = True
  
  
  def get_default_cache_root():
-@@ -870,6 +872,17 @@ environment_variables: dict[str, Callable[[], Any]] = {
+@@ -870,6 +873,21 @@ environment_variables: dict[str, Callable[[], Any]] = {
      # processes via zmq.
      "VLLM_MQ_MAX_CHUNK_BYTES_MB":
      lambda: int(os.getenv("VLLM_MQ_MAX_CHUNK_BYTES_MB", "16")),
++
++    # Port used by AIBrix connector side channel
++    "VLLM_AIBRIX_SIDE_CHANNEL_PORT":
++    lambda: int(os.getenv("VLLM_AIBRIX_SIDE_CHANNEL_PORT", "6667")),
 +
 +    # Specify the sync granularity used by AIBrix controllers. Please refer to
 +    # AIBrixOffloadingConnectorSyncGranularity for more details.
@@ -10021,7 +10368,7 @@ index 80c5f289b..addd61da1 100644
  
  # --8<-- [end:env-vars-definition]
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index 3d7bbe7e0..1317e1273 100644
+index 3d7bbe7e0..9499ea6b6 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
 @@ -82,6 +82,10 @@ class Scheduler(SchedulerInterface):
@@ -10043,17 +10390,20 @@ index 3d7bbe7e0..1317e1273 100644
  
          # The request IDs that are finished in between the previous and the
          # current steps. This is used to notify the workers about the finished
-@@ -107,6 +112,9 @@ class Scheduler(SchedulerInterface):
+@@ -107,6 +112,12 @@ class Scheduler(SchedulerInterface):
          # KV Connector: requests in process of async KV loading or recving
          self.finished_recving_kv_req_ids: set[str] = set()
  
 +        self.prefetching_req_stats: dict[str, int] = {}
 +        self.nonprefetchable_req_ids: set[str] = set()
++        self.local_cached_req_ids: set[str] = set()
++        self.testing_req_ids: set[str] = set()
++        self.max_testing_reqs = 32
 +
          # OPTIMIZATION: Cache the CachedRequestData objects to avoid creating
          # them at each scheduling step.
          # Request id -> deque of CachedRequestData
-@@ -183,6 +191,7 @@ class Scheduler(SchedulerInterface):
+@@ -183,6 +194,7 @@ class Scheduler(SchedulerInterface):
          req_to_new_block_ids: dict[str, tuple[list[int], ...]] = {}
          num_scheduled_tokens: dict[str, int] = {}
          token_budget = self.max_num_scheduled_tokens
@@ -10061,7 +10411,7 @@ index 3d7bbe7e0..1317e1273 100644
          # Encoder-related.
          scheduled_encoder_inputs: dict[str, list[int]] = {}
          encoder_budget = self.max_num_encoder_input_tokens
-@@ -247,9 +256,20 @@ class Scheduler(SchedulerInterface):
+@@ -247,9 +259,22 @@ class Scheduler(SchedulerInterface):
                  if new_blocks is None:
                      # The request cannot be scheduled.
                      # Preempt the lowest-priority request.
@@ -10074,6 +10424,8 @@ index 3d7bbe7e0..1317e1273 100644
 +                        # preempted request becomes prefetchable again
 +                        self.nonprefetchable_req_ids.discard(
 +                            preempted_req.request_id)
++                        self.local_cached_req_ids.discard(
++                            preempted_req.request_id)
 +                        self.prefetching_req_stats.pop(
 +                            preempted_req.request_id, None)
 +                    else:
@@ -10084,7 +10436,7 @@ index 3d7bbe7e0..1317e1273 100644
                      preempted_req.num_computed_tokens = 0
                      if self.log_stats:
                          preempted_req.record_event(
-@@ -311,13 +331,142 @@ class Scheduler(SchedulerInterface):
+@@ -311,13 +336,143 @@ class Scheduler(SchedulerInterface):
                  if req.lora_request and req.lora_request.lora_int_id > 0)
              assert len(scheduled_loras) <= self.lora_config.max_loras
  
@@ -10123,6 +10475,7 @@ index 3d7bbe7e0..1317e1273 100644
 +
 +                    self.prefetching.popleft()
 +                    # append it to the head of waiting queue
++                    request.status = RequestStatus.WAITING
 +                    self.waiting.appendleft(request)
 +                    self.nonprefetchable_req_ids.add(req_id)
 +                    continue
@@ -10179,7 +10532,7 @@ index 3d7bbe7e0..1317e1273 100644
 +                    )
 +
 +                assert self.connector is not None
-+                num_to_prefetch_tokens = self.connector.get_num_prefetch_tokens(
++                num_to_prefetch_tokens = self.connector.load_and_prefetch(
 +                    request, num_new_prefetched_tokens, num_to_prefetch_tokens)
 +                if num_to_prefetch_tokens > 0:
 +                    logger.debug(
@@ -10228,17 +10581,23 @@ index 3d7bbe7e0..1317e1273 100644
                  if len(self.running) == self.max_num_running_reqs:
                      break
  
-@@ -358,6 +507,60 @@ class Scheduler(SchedulerInterface):
+@@ -358,6 +513,83 @@ class Scheduler(SchedulerInterface):
                      skipped_waiting_requests.appendleft(request)
                      continue
  
 +                num_to_prefetch_tokens = 0
 +                if (self.use_three_phase_kv_sched
-+                        and prefetching_token_budget > 0 and request.request_id
-+                        not in self.nonprefetchable_req_ids):
++                        and prefetching_token_budget > 0
++                        and self._is_prefetchable(request)):
++                    # Get locally-cached tokens.
++                    local_matched_blocks, num_local_matched_tokens = \
++                        self.kv_cache_manager.get_computed_blocks(
++                            request)
++
 +                    req_id = request.request_id
 +
-+                    num_to_prefetch_tokens = request.num_prompt_tokens
++                    num_to_prefetch_tokens = (request.num_prompt_tokens -
++                                              num_local_matched_tokens)
 +
 +                    if (0 < self.scheduler_config.long_prefill_token_threshold
 +                            < num_to_prefetch_tokens):
@@ -10252,9 +10611,9 @@ index 3d7bbe7e0..1317e1273 100644
 +
 +                if num_to_prefetch_tokens > 0:
 +                    assert self.connector is not None
-+                    num_to_prefetch_tokens = (
-+                        self.connector.get_num_prefetch_tokens(
-+                            request, 0, num_to_prefetch_tokens))
++                    request.num_computed_tokens = num_local_matched_tokens
++                    num_to_prefetch_tokens = (self.connector.load_and_prefetch(
++                        request, 0, num_to_prefetch_tokens))
 +                    if num_to_prefetch_tokens > 0:
 +                        logger.debug(
 +                            "Request[id=%s, prompt_len=%d] computed tokens: "
@@ -10267,29 +10626,46 @@ index 3d7bbe7e0..1317e1273 100644
 +                        prefetching_token_budget -= num_to_prefetch_tokens
 +                        assert prefetching_token_budget >= 0
 +
++                        if (num_local_matched_tokens > 0
++                                and self.kv_cache_manager.enable_caching):
++                            self.kv_cache_manager.block_pool.touch(
++                                local_matched_blocks.blocks)
++                            self.kv_cache_manager.coordinator\
++                                .save_new_computed_blocks(
++                                request.request_id, local_matched_blocks.blocks
++                            )
++                            self.local_cached_req_ids.add(request.request_id)
++                            self.connector.update_state_after_alloc(
++                                request,
++                                local_matched_blocks,
++                                0,
++                            )
++
++                        request.status = RequestStatus.WAITING_FOR_REMOTE_KVS
 +                        self.waiting.popleft()
 +                        self.prefetching.append(request)
++                        self.testing_req_ids.discard(req_id)
 +                        continue
 +                    else:
++                        request.num_computed_tokens -= num_local_matched_tokens
 +                        self.nonprefetchable_req_ids.add(req_id)
 +
-+                # skip scheduling compute tokens for current request if there
-+                # is no token budget
-+                if self.use_three_phase_kv_sched and token_budget == 0:
-+                    self.waiting.popleft()
-+                    skipped_waiting_requests.appendleft(request)
-+                    continue
-+
-+                # only continue to schedule compute if this is a nonprefetchable
-+                # request
-+                if (self.use_three_phase_kv_sched and request.request_id
-+                        not in self.nonprefetchable_req_ids):
-+                    break
++                if self.use_three_phase_kv_sched:
++                    # 1. we don't have token budget but still have prefetching
++                    # budget, skip current request and try the next one in the Q
++                    if prefetching_token_budget > 0 and token_budget == 0:
++                        self.waiting.popleft()
++                        skipped_waiting_requests.appendleft(request)
++                        continue
++                    # 2. we still have token budget but only continue to
++                    # schedule compute if this is a nonprefetchable request
++                    if request.request_id not in self.nonprefetchable_req_ids:
++                        break
 +
                  num_external_computed_tokens = 0
                  load_kv_async = False
  
-@@ -403,6 +606,7 @@ class Scheduler(SchedulerInterface):
+@@ -403,6 +635,7 @@ class Scheduler(SchedulerInterface):
                          num_new_tokens = (
                              self.scheduler_config.long_prefill_token_threshold)
                      num_new_tokens = min(num_new_tokens, token_budget)
@@ -10297,15 +10673,18 @@ index 3d7bbe7e0..1317e1273 100644
                      assert num_new_tokens > 0
  
                      # Schedule encoder inputs.
-@@ -452,6 +656,7 @@ class Scheduler(SchedulerInterface):
+@@ -452,6 +685,10 @@ class Scheduler(SchedulerInterface):
                          request.request_id] = req_index
                  req_index += 1
                  self.running.append(request)
 +
++                if self.use_three_phase_kv_sched:
++                    self.testing_req_ids.discard(request.request_id)
++
                  if self.log_stats:
                      request.record_event(EngineCoreEventType.SCHEDULED,
                                           scheduled_timestamp)
-@@ -470,6 +675,7 @@ class Scheduler(SchedulerInterface):
+@@ -470,6 +707,7 @@ class Scheduler(SchedulerInterface):
                  num_scheduled_tokens[request.request_id] = num_new_tokens
                  token_budget -= num_new_tokens
                  request.status = RequestStatus.RUNNING
@@ -10313,7 +10692,7 @@ index 3d7bbe7e0..1317e1273 100644
                  request.num_computed_tokens = num_computed_tokens
                  # Count the number of prefix cached tokens.
                  if request.num_cached_tokens < 0:
-@@ -492,11 +698,12 @@ class Scheduler(SchedulerInterface):
+@@ -492,11 +730,12 @@ class Scheduler(SchedulerInterface):
          assert total_num_scheduled_tokens <= self.max_num_scheduled_tokens
          assert token_budget >= 0
          assert len(self.running) <= self.max_num_running_reqs
@@ -10331,7 +10710,53 @@ index 3d7bbe7e0..1317e1273 100644
  
          # Get the longest common prefix among all requests in the running queue.
          # This can be potentially used for cascade attention.
-@@ -866,7 +1073,7 @@ class Scheduler(SchedulerInterface):
+@@ -506,7 +745,9 @@ class Scheduler(SchedulerInterface):
+             any_request = self.running[0]
+             num_common_prefix_blocks = (
+                 self.kv_cache_manager.get_num_common_prefix_blocks(
+-                    any_request, len(self.running)))
++                    any_request,
++                    len(self.running) + len(self.local_cached_req_ids),
++                ))
+ 
+         grammar_bitmask = self.structured_output_manager.grammar_bitmask(
+             self.requests,
+@@ -583,6 +824,34 @@ class Scheduler(SchedulerInterface):
+         self.finished_req_ids = set()
+         return scheduler_output
+ 
++    def _is_prefetchable(self, request: Request) -> bool:
++        req_id = request.request_id
++        if (req_id not in self.testing_req_ids
++                and req_id not in self.nonprefetchable_req_ids) or len(
++                    self.testing_req_ids) <= (self.max_testing_reqs // 2):
++            requests: list[Request] = []
++            for i in range(len(self.waiting)):
++                req = self.waiting[i]
++                if (req.request_id in self.testing_req_ids
++                        or req.request_id in self.nonprefetchable_req_ids):
++                    continue
++                if req.status == RequestStatus.WAITING:
++                    self.testing_req_ids.add(req.request_id)
++                    requests.append(req)
++                if len(requests) == self.max_testing_reqs:
++                    break
++
++            assert self.connector is not None
++            self.connector.add_requests(requests)
++
++        if req_id in self.nonprefetchable_req_ids:
++            return False
++        elif self.connector.test_request(request):
++            return True
++        else:
++            self.nonprefetchable_req_ids.add(req_id)
++            return False
++
+     def _make_cached_request_data(
+         self,
+         request: Request,
+@@ -866,7 +1135,7 @@ class Scheduler(SchedulerInterface):
  
      def get_request_counts(self) -> tuple[int, int]:
          """Returns (num_running_reqs, num_waiting_reqs)."""
@@ -10340,7 +10765,7 @@ index 3d7bbe7e0..1317e1273 100644
  
      def add_request(self, request: Request) -> None:
          self.waiting.append(request)
-@@ -898,6 +1105,9 @@ class Scheduler(SchedulerInterface):
+@@ -898,6 +1167,9 @@ class Scheduler(SchedulerInterface):
  
              if request.status == RequestStatus.RUNNING:
                  self.running.remove(request)
@@ -10350,16 +10775,18 @@ index 3d7bbe7e0..1317e1273 100644
              else:
                  self.waiting.remove(request)
              request.status = finished_status
-@@ -912,6 +1122,8 @@ class Scheduler(SchedulerInterface):
+@@ -912,6 +1184,10 @@ class Scheduler(SchedulerInterface):
          request_id = request.request_id
          self._cached_reqs_data.pop(request_id, None)
          self.finished_req_ids.add(request_id)
 +        self.nonprefetchable_req_ids.discard(request_id)
++        self.local_cached_req_ids.discard(request_id)
++        self.testing_req_ids.discard(request_id)
 +        self.prefetching_req_stats.pop(request_id, None)
          if self.finished_req_ids_dict is not None:
              self.finished_req_ids_dict[request.client_index].add(request_id)
  
-@@ -928,7 +1140,7 @@ class Scheduler(SchedulerInterface):
+@@ -928,7 +1204,7 @@ class Scheduler(SchedulerInterface):
          del self.requests[request.request_id]
  
      def get_num_unfinished_requests(self) -> int:
@@ -10368,7 +10795,7 @@ index 3d7bbe7e0..1317e1273 100644
  
      def has_finished_requests(self) -> bool:
          return len(self.finished_req_ids) > 0
-@@ -946,7 +1158,7 @@ class Scheduler(SchedulerInterface):
+@@ -946,7 +1222,7 @@ class Scheduler(SchedulerInterface):
          assert prefix_cache_stats is not None
          return SchedulerStats(
              num_running_reqs=len(self.running),
@@ -10377,7 +10804,7 @@ index 3d7bbe7e0..1317e1273 100644
              gpu_cache_usage=self.kv_cache_manager.usage,
              prefix_cache_stats=prefix_cache_stats,
              spec_decoding_stats=spec_decoding_stats,
-@@ -1036,9 +1248,43 @@ class Scheduler(SchedulerInterface):
+@@ -1036,9 +1312,43 @@ class Scheduler(SchedulerInterface):
              scheduler the request during the next step.
          """
          # KV Connector:: update recv and send status from last step.
