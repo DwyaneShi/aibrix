@@ -341,7 +341,8 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
 
         if self._chunk_size < 4 * self.block_ntokens:
             logger.warning(
-                "chunk_size is too small, using %d instead",
+                "AIBRIX_KV_CACHE_OL_CHUNK_SIZE=%d is too small, using %d",
+                self._chunk_size,
                 4 * self.block_ntokens,
             )
             self._chunk_size = 4 * self.block_ntokens
@@ -400,18 +401,32 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
                 // self.block_ntokens
             )
 
+            engine_batch_size = self.config.model_spec.max_num_batched_tokens
+            if engine_batch_size <= 0:
+                engine_batch_size = self._chunk_size
+
+            if 0 < self._l2_inflight_quota < 2 * engine_batch_size:
+                temp = self._l2_inflight_quota
+                self._l2_inflight_quota = 2 * engine_batch_size
+                logger.warning(
+                    "AIBRIX_KV_CACHE_OL_L2_CACHE_INGESTION_MAX_INFLIGHT_TOKENS"
+                    "=%d is too small, using %d instead",
+                    temp,
+                    self._l2_inflight_quota,
+                )
+
             max_mr_nbytes = ManagedMemoryRegion.calculate_size(
                 self.block_nbytes, self.config.model_spec.max_model_len
             )
-            nblocks_per_chunk = self._chunk_size // self.block_ntokens
+            nblocks_per_batch = engine_batch_size // self.block_ntokens
             # more capacity for async/sync load
             if self._l2_inflight_quota > 0:
                 more_capacity_nbytes = self._l2_inflight_quota * max_mr_nbytes
             else:
-                more_capacity_nbytes = nblocks_per_chunk * max_mr_nbytes
+                more_capacity_nbytes = nblocks_per_batch * max_mr_nbytes
 
             # more capacity for get
-            more_capacity_nbytes += 2 * nblocks_per_chunk * max_mr_nbytes
+            more_capacity_nbytes += 2 * nblocks_per_batch * max_mr_nbytes
 
             allocator_capacity_nbytes += more_capacity_nbytes
 
