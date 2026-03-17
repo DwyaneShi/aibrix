@@ -156,22 +156,25 @@ class L2Cache(MeasurableBase):
                 self._mr_ops_queue.task_done()
                 break
 
-            mr, func = item
+            mr, func, kwargs = item
             try:
-                await func(mr)
+                await func(mr, **kwargs)
             except Exception as e:
                 logger.warning("MR op failed: %s", e)
             finally:
                 self._mr_ops_queue.task_done()
 
     def _enqueue_mr_op(
-        self, mr: ConnectorZeroCopyMemoryRegion, func: Callable
+        self,
+        mr: ConnectorZeroCopyMemoryRegion,
+        func: Callable,
+        **kwargs,
     ) -> None:
         assert self._loop is not None
         try:
             self._loop.call_soon_threadsafe(
                 self._mr_ops_queue.put_nowait,  # type: ignore
-                (mr, func),
+                (mr, func, kwargs),
             )
             return
         except Exception:
@@ -295,12 +298,14 @@ class L2Cache(MeasurableBase):
         prefix: KVCacheKeyTypes | None,
         query: KVCacheKeyTypes,
         kv_tensors: (MemoryRegion | Sequence[MemoryRegion] | KVCacheHandle),
+        pin: bool = False,
     ) -> Status[int]:
         """Put kv tensors to the cache.
         Args:
             prefix: The prefix tokens of the kv tensors.
             query: The query tokens of the kv tensors.
             kv_tensors: kv tensors or cache handles.
+            pin: Whether to pin the kv tensors.
         Returns:
             The status of the put operation and the number of blocks.
         """
@@ -313,6 +318,25 @@ class L2Cache(MeasurableBase):
         # If it is not a full block, we don't need to cache it.
         if len(query) // self.block_ntokens == 0:
             return Status.ok(0)
+
+        if self._backend.feature.zero_copy:
+            if isinstance(kv_tensors, KVCacheHandle):
+                ret = len(kv_tensors)
+                # Seal all the MRs
+                for mr in kv_tensors.memory_regions:
+                    ext_mr = cast(ExternalMemoryRegion, mr)
+                    ext_mr._on_release = None
+                    connector_mr = ext_mr.depends_on
+                    if connector_mr is None:
+                        continue
+                    self._enqueue_mr_op(
+                        connector_mr, self._backend.seal, pin=pin
+                    )
+                return Status.ok(ret)
+            else:
+                raise ValueError(
+                    "kv_tensors must be KVCacheHandle when zero_copy isenabled."
+                )
 
         if isinstance(kv_tensors, MemoryRegion):
             # `kv_tensors` comes from L1Cache and should be only one block
@@ -737,16 +761,20 @@ class L2Cache(MeasurableBase):
                 )
                 slab = buffer_to_tensor(connector_mr.addr, connector_mr.length)
 
-                def on_seal(
+                def on_release(
                     x: torch.Tensor, y: int, z: int, _mr=connector_mr
                 ) -> None:
-                    self._enqueue_mr_op(_mr, lambda mr: self._backend.seal(mr))
+                    # We drop the MR by default. Only seal it if it is put into
+                    # the cache. Therefore, the actual seal op is done in the
+                    # put operation.
+                    self._enqueue_mr_op(_mr, self._backend.drop)
 
                 mr = ExternalMemoryRegion(
                     slab,
                     0,
                     connector_mr.length,
-                    on_seal,  # type: ignore
+                    on_release,
+                    depends_on=connector_mr,
                 )
                 mrs.append(mr)
 
@@ -756,9 +784,7 @@ class L2Cache(MeasurableBase):
                     if not tasks[j].done() or not tasks[j].result().is_ok():
                         continue
                     mr_to_drop = tasks[j].result().get()
-                    self._enqueue_mr_op(
-                        mr_to_drop, lambda mr: self._backend.drop(mr)
-                    )
+                    self._enqueue_mr_op(mr_to_drop, self._backend.drop)
                 break
 
         return Status.ok(mrs)
@@ -769,11 +795,15 @@ class L2Cache(MeasurableBase):
         self,
         prefix: KVCacheKeyTypes | None,
         query: KVCacheKeyTypes,
+        pin: bool = False,
+        unpin: bool = False,
     ) -> Status[Sequence[MemoryRegion]]:
         """Acquire pinned memory regions that store the kv tensors.
         Args:
             prefix: The prefix tokens of the kv tensors.
             query: The query tokens of the kv tensors.
+            pin: Whether to pin the memory regions after being acquired.
+            unpin: Whether to unpin the memory regions after being released.
         Returns:
             The memory regions that store the kv tensors.
         """
@@ -787,7 +817,9 @@ class L2Cache(MeasurableBase):
             tasks = []
             async with asyncio.TaskGroup() as tg:
                 for _, key_str in key_batch:
-                    tasks.append(tg.create_task(self._backend.acquire(key_str)))
+                    tasks.append(
+                        tg.create_task(self._backend.acquire(key_str, pin))
+                    )
 
             if len(tasks) == 0:
                 break
@@ -802,17 +834,20 @@ class L2Cache(MeasurableBase):
                 slab = buffer_to_tensor(connector_mr.addr, connector_mr.length)
 
                 def on_release(
-                    x: torch.Tensor, y: int, z: int, _mr=connector_mr
+                    x: torch.Tensor,
+                    y: int,
+                    z: int,
+                    unpin=unpin,
+                    _mr=connector_mr,
                 ) -> None:
-                    self._enqueue_mr_op(
-                        _mr, lambda mr: self._backend.release(mr)
-                    )
+                    self._enqueue_mr_op(_mr, self._backend.release, unpin=unpin)
 
                 mr = ExternalMemoryRegion(
                     slab,
                     0,
                     connector_mr.length,
-                    on_release,
+                    on_release=on_release,
+                    depends_on=connector_mr,
                 )
                 mrs.append(mr)
 
@@ -823,7 +858,11 @@ class L2Cache(MeasurableBase):
                         continue
                     mr_to_release = tasks[j].result().get()
                     self._enqueue_mr_op(
-                        mr_to_release, lambda mr: self._backend.release(mr)
+                        # if the MR is acquired with pin=True, then we need to
+                        # release it with unpin=True
+                        mr_to_release,
+                        self._backend.release,
+                        unpin=pin,
                     )
                 break
 
@@ -849,6 +888,30 @@ class L2Cache(MeasurableBase):
         for _, key_str in self._cache_block_keys(prefix, query):
             await self._backend.delete(key_str)
         return Status.ok()
+
+    def unpin(
+        self,
+        kv_tensors: MemoryRegion | Sequence[MemoryRegion] | KVCacheHandle,
+    ) -> None:
+        """Unpin the kv tensors.
+        Args:
+            kv_tensors: The kv tensors to unpin.
+        """
+        if not self._backend.feature.pin_unpin:
+            return
+
+        if isinstance(kv_tensors, KVCacheHandle):
+            for mr in kv_tensors.memory_regions:
+                ext_mr = cast(ExternalMemoryRegion, mr)
+                connector_mr = ext_mr.depends_on
+                if connector_mr is None:
+                    continue
+                ext_mr._on_release = None
+                self._enqueue_mr_op(
+                    connector_mr, self._backend.release, unpin=True
+                )
+        else:
+            raise ValueError("kv_tensors must be a KVCacheHandle")
 
     def _cache_block_keys(
         self, prefix: KVCacheKeyTypes | None, query: KVCacheKeyTypes

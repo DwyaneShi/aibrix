@@ -23,6 +23,15 @@ from .cache_hashable import (
 from .memory import MemoryRegion
 
 
+def extract_pin_unpin_kwargs(kwargs: dict) -> Tuple[dict, bool, bool]:
+    updated_kwargs = dict(kwargs)
+    pin = updated_kwargs.pop("pin", False)
+    unpin = updated_kwargs.pop("unpin", False)
+    if pin and unpin:
+        raise ValueError("pin and unpin cannot both be true")
+    return updated_kwargs, pin, unpin
+
+
 def parse_kvcache_api_args(
     *args, **kwargs
 ) -> Tuple[
@@ -33,6 +42,12 @@ def parse_kvcache_api_args(
     """
     Parse arguments and return normalized parameters.
 
+    Supported signatures:
+        - (prefix, query)
+        - (prefix, query, kv_tensors)
+        - (cache_key)
+        - (cache_key, kv_tensors)
+
     Returns:
         Tuple of (prefix, query, kv_tensors) where one of the following will
         be None:
@@ -41,6 +56,10 @@ def parse_kvcache_api_args(
         - If called with (cache_key): kv_tensors will be None
         - If called with (cache_key, kv_tensors): none will be None
     """
+    if "pin" in kwargs or "unpin" in kwargs:
+        raise ValueError("pin/unpin should be parsed separately")
+    if any(isinstance(arg, bool) for arg in args):
+        raise ValueError("pin/unpin should be parsed separately")
 
     def validate_cache_key_type(cache_key):
         assert isinstance(cache_key, KVCacheKey), (
@@ -75,25 +94,19 @@ def parse_kvcache_api_args(
             prefix = kwargs["prefix"]
             query = kwargs["query"]
             validate_prefix_query_type(prefix, query)
-            if "kv_tensors" in kwargs:
-                kv_tensors = kwargs["kv_tensors"]
-                return prefix, query, kv_tensors
-            return prefix, query, None
+            kv_tensors = kwargs.get("kv_tensors")
+            return prefix, query, kv_tensors
         elif "query" in kwargs and len(args) == 1:
             prefix = args[0]
             query = kwargs["query"]
             validate_prefix_query_type(prefix, query)
-            if "kv_tensors" in kwargs:
-                kv_tensors = kwargs["kv_tensors"]
-                return prefix, query, kv_tensors
-            return prefix, query, None
+            kv_tensors = kwargs.get("kv_tensors")
+            return prefix, query, kv_tensors
         elif "cache_key" in kwargs:
             cache_key = kwargs["cache_key"]
             validate_cache_key_type(cache_key)
-            if "kv_tensors" in kwargs:
-                kv_tensors = kwargs["kv_tensors"]
-                return cache_key.prefix, cache_key.query, kv_tensors  # type: ignore
-            return cache_key.prefix, cache_key.query, None  # type: ignore
+            kv_tensors = kwargs.get("kv_tensors")
+            return cache_key.prefix, cache_key.query, kv_tensors  # type: ignore
         elif "kv_tensors" in kwargs and len(args) == 1:
             cache_key = args[0]
             validate_cache_key_type(cache_key)

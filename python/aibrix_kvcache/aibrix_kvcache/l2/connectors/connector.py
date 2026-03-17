@@ -36,6 +36,7 @@ class ConnectorFeature:
         gdr_put: Whether the kv cache connector supports GDR put.
         gdr_get: Whether the kv cache connector supports GDR get.
         zero_copy: Whether the kv cache connector supports zero copy.
+        pin_unpin: Whether the kv cache connector supports pin/unpin.
     """
 
     mput_mget: bool = False
@@ -44,6 +45,7 @@ class ConnectorFeature:
     gdr_put: bool = False
     gdr_get: bool = False
     zero_copy: bool = False
+    pin_unpin: bool = False
 
 
 @dataclass
@@ -176,7 +178,12 @@ class Connector(Generic[K, V]):
 
     @abstractmethod
     async def exists(self, key: K) -> Status:
-        """Check if key is in the store."""
+        """Check if key is in the store.
+        Args:
+            key: The key of the kv tensor.
+        Returns:
+            The status of the exists operation.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -292,11 +299,14 @@ class Connector(Generic[K, V]):
         """
         raise NotImplementedError
 
-    async def seal(self, mr: ConnectorZeroCopyMemoryRegion) -> None:
+    async def seal(
+        self, mr: ConnectorZeroCopyMemoryRegion, pin: bool = False
+    ) -> None:
         """Seal the allocated zero copy memory region.
 
         Args:
             mr: The zero copy memory region to be sealed.
+            pin: Whether to pin the memory region on the server side.
         """
         raise NotImplementedError
 
@@ -308,12 +318,15 @@ class Connector(Generic[K, V]):
         """
         raise NotImplementedError
 
-    async def acquire(self, key: K) -> Status[ConnectorZeroCopyMemoryRegion]:
+    async def acquire(
+        self, key: K, pin: bool = False
+    ) -> Status[ConnectorZeroCopyMemoryRegion]:
         """Acquire the pinned memory region that has the kv cache of the given
         key.
 
         Args:
             key: The key of the kv cache.
+            pin: Whether to pin the memory region on the server side.
 
         Returns:
             The status of the acquire operation and the acquired pinned
@@ -321,10 +334,13 @@ class Connector(Generic[K, V]):
         """
         raise NotImplementedError
 
-    async def release(self, mr: ConnectorZeroCopyMemoryRegion) -> None:
+    async def release(
+        self, mr: ConnectorZeroCopyMemoryRegion, unpin: bool = False
+    ) -> None:
         """Release the acquired pinned memory region.
 
         Args:
             mr: The zero copy memory region to be released.
+            unpin: Whether to unpin the memory region on the server side.
         """
         raise NotImplementedError

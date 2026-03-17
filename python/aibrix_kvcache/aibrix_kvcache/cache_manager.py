@@ -27,7 +27,7 @@ import torch.distributed as dist
 import uvloop
 
 from . import envs
-from .cache_args import parse_kvcache_api_args
+from .cache_args import extract_pin_unpin_kwargs, parse_kvcache_api_args
 from .cache_handle import (
     GDRKVCacheHandle,
     KVCacheHandle,
@@ -210,6 +210,9 @@ class KVCacheManager(ABC):
         self,
         prefix: TokenListView | None,
         query: TokenListView,
+        *,
+        pin: bool,
+        unpin: bool,
     ) -> Status[Tuple[int, KVCacheHandle]]:
         """Acquire cache handle of the kv tensors for the given prefix and
         query tokens.
@@ -223,6 +226,8 @@ class KVCacheManager(ABC):
         Args:
             prefix: The prefix tokens of the kv cache. E.g., [1, 2, 3]
             query: The query tokens of the kv cache. E.g., [4, 5, 6, 7]
+            pin: Whether to pin the memory of the kv cache after acquiring.
+            unpin: Whether to unpin the memory of the kv cache after releasing.
         Returns:
             Number of tokens have been fetched from the kv cache service.
             The cache handles corresponding to the given tokens.
@@ -234,6 +239,9 @@ class KVCacheManager(ABC):
         self,
         prefix: BlockHashes | None,
         query: BlockHashes,
+        *,
+        pin: bool,
+        unpin: bool,
     ) -> Status[Tuple[int, KVCacheHandle]]:
         """Acquire cache handle of the kv tensors for the given prefix and
         query blocks.
@@ -247,6 +255,8 @@ class KVCacheManager(ABC):
         Args:
             prefix: The prefix block hashes of the kv cache.
             query: The query block hashes of the kv cache.
+            pin: Whether to pin the memory of the kv cache after acquiring.
+            unpin: Whether to unpin the memory of the kv cache after releasing.
         Returns:
             Number of tokens have been fetched from the kv cache service.
             The cache handles corresponding to the given tokens.
@@ -255,7 +265,7 @@ class KVCacheManager(ABC):
 
     @overload
     def acquire(
-        self, cache_key: KVCacheKey
+        self, cache_key: KVCacheKey, *, pin: bool, unpin: bool
     ) -> Status[Tuple[int, KVCacheHandle]]:
         """Acquire cache handle of the kv tensors for the given cache key.
 
@@ -268,6 +278,8 @@ class KVCacheManager(ABC):
         Args:
             cache_key: The cache key of the kv cache. E.g., KVCacheKey(
                 [1, 2, 3], [4, 5, 6, 7])
+            pin: Whether to pin the memory of the kv cache after acquiring.
+            unpin: Whether to unpin the memory of the kv cache after releasing.
         Returns:
             Number of tokens have been fetched from the kv cache service.
             The cache handles corresponding to the given tokens.
@@ -387,6 +399,8 @@ class KVCacheManager(ABC):
         prefix: TokenListView | None,
         query: TokenListView,
         kv_tensors: KVCacheHandle,
+        *,
+        pin: bool,
     ) -> Status[int]:
         """Put kv tensors to the kv cache service.
 
@@ -402,6 +416,7 @@ class KVCacheManager(ABC):
                 For example, if the layout is NCLD, then:
                 The k, v tensors for i-th token at the j-th layer are
                 kv_tensors[i][0[j] and kv_tensors[i][1[j], respectively.
+            pin: Whether to pin the memory of the kv cache.
 
         Returns:
             The status of the put operation and the number of tokens have
@@ -415,6 +430,8 @@ class KVCacheManager(ABC):
         prefix: BlockHashes | None,
         query: BlockHashes,
         kv_tensors: KVCacheHandle,
+        *,
+        pin: bool,
     ) -> Status[int]:
         """Put kv tensors to the kv cache service.
 
@@ -430,6 +447,7 @@ class KVCacheManager(ABC):
                 For example, if the layout is NCLD, then:
                 The k, v tensors for i-th token at the j-th layer are
                 kv_tensors[i][0[j] and kv_tensors[i][1[j], respectively.
+            pin: Whether to pin the memory of the kv cache.
 
         Returns:
             The status of the put operation and the number of tokens have
@@ -442,6 +460,8 @@ class KVCacheManager(ABC):
         self,
         cache_key: KVCacheKey,
         kv_tensors: KVCacheHandle,
+        *,
+        pin: bool,
     ) -> Status[int]:
         """Put kv tensors to the kv cache service.
 
@@ -457,6 +477,7 @@ class KVCacheManager(ABC):
                 For example, if the layout is NCLD, then:
                 The k, v tensors for i-th token at the j-th layer are
                 kv_tensors[i][0[j] and kv_tensors[i][1[j], respectively.
+            pin: Whether to pin the memory of the kv cache.
 
         Returns:
             The status of the put operation and the number of tokens have
@@ -933,12 +954,14 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         prefix: KVCacheKeyTypes | None,
         query: KVCacheKeyTypes,
         value: MemoryRegion | KVCacheHandle,
+        pin: bool = False,
     ) -> Status:
         """Put the kv tensors to the L2Cache.
         Args:
             prefix: The prefix tokens of the kv tensors.
             query: The query tokens of the kv tensors.
             value: The kv tensors.
+            pin: Whether to pin the kv tensors.
         Returns:
             The status of the put operation and the number of tokens have
             been put or scheduled.
@@ -948,10 +971,10 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         status = None
         if self._l2_inflight_quota == 0:
             # sync write
-            status = self._l2_put_sync(prefix, query, value)
+            status = self._l2_put_sync(prefix, query, value, pin)
         else:
             # async write
-            status = self._l2_put_async(prefix, query, value)
+            status = self._l2_put_async(prefix, query, value, pin)
 
         return status
 
@@ -960,12 +983,14 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         prefix: KVCacheKeyTypes | None,
         query: KVCacheKeyTypes,
         value: (MemoryRegion | KVCacheHandle),
+        pin: bool = False,
     ) -> Status:
         """Put the kv tensors to the L2Cache asynchrously.
         Args:
             prefix: The prefix tokens of the kv tensors.
             query: The tokens of the kv tensors.
             value: The kv tensors.
+            pin: Whether to pin the kv tensors.
         Returns:
             The status of the put operation and the number of tokens have
             been scheduled.
@@ -1016,7 +1041,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         # Async write to L2Cache
         assert self._event_loop is not None
         future = asyncio.run_coroutine_threadsafe(
-            self._l2_cache.put(prefix, query, value), self._event_loop
+            self._l2_cache.put(prefix, query, value, pin), self._event_loop
         )
         future.add_done_callback(functools.partial(_done_callback, value=value))
         return Status.ok(len(query))
@@ -1026,12 +1051,14 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         prefix: KVCacheKeyTypes | None,
         query: KVCacheKeyTypes,
         value: (MemoryRegion | KVCacheHandle),
+        pin: bool = False,
     ) -> Status:
         """Put the kv tensors to the L2Cache blockingly.
         Args:
             prefix: The prefix tokens of the kv tensors.
             query: The tokens of the kv tensors.
             value: The kv tensors.
+            pin: Whether to pin the kv tensors.
         Returns:
             The status of the put operation and the number of tokens have
             been put.
@@ -1039,7 +1066,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         assert self._l2_cache is not None, "l2_cache is not initialized."
         assert self._event_loop is not None
         future = asyncio.run_coroutine_threadsafe(
-            self._l2_cache.put(prefix, query, value), self._event_loop
+            self._l2_cache.put(prefix, query, value, pin), self._event_loop
         )
         # wait until the write is done
         status = future.result()
@@ -1076,6 +1103,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
     @nvtx_range("acquire", "KVCacheManager")
     @MeasurableBase.measure(MetricRecorder.OP.ACQUIRE)
     def acquire(self, *args, **kwargs) -> Status[Tuple[int, KVCacheHandle]]:
+        kwargs, pin, unpin = extract_pin_unpin_kwargs(kwargs)
         prefix, query, _ = parse_kvcache_api_args(*args, **kwargs)
 
         if not isinstance(query, TokenListView):
@@ -1084,7 +1112,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
                 f"of cache key's block_ntokens ({query.block_ntokens})"
             )
 
-        status = self._acquire_impl(prefix, query)
+        status = self._acquire_impl(prefix, query, pin=pin, unpin=unpin)
         if not status.is_ok():
             return Status(status)
 
@@ -1234,6 +1262,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             if not future.done():
                 future.cancel()
 
+    # TODO: implement pin for L1Cache acquire and L2Cache get
     def _acquire_impl(
         self,
         prefix: KVCacheKeyTypes | None,
@@ -1241,6 +1270,8 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         output_mrs: Sequence[MemoryRegion]
         | Sequence[Sequence[MemoryRegion]]
         | None = None,
+        pin: bool = False,
+        unpin: bool = False,
     ) -> (
         Status[Sequence[MemoryRegion]]
         | Status[Sequence[Sequence[MemoryRegion]]]
@@ -1251,6 +1282,8 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             prefix: The prefix tokens/block hashes of the kv cache.
             query: The query tokens/block hashes of the kv cache.
             output_mrs: The memory regions to store the fetched kv cache.
+            pin: Whether to pin the memory regions after acquiring.
+            unpin: Whether to unpin the memory regions after releasing.
         Returns:
             The memory regions corresponding to the tokens.
         """
@@ -1270,7 +1303,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
 
         # Bypass L1 if L2 cache is enabled with zero copy
         if output_mrs is None and self._l2_cache_has_zero_copy():
-            return self._l2_acquire_impl(prefix, query)
+            return self._l2_acquire_impl(prefix, query, pin, unpin)
 
         fetched_mrs: List[MemoryRegion] = []
         num_fetched_blocks = 0
@@ -1401,6 +1434,8 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         self,
         prefix: KVCacheKeyTypes | None,
         query: KVCacheKeyTypes,
+        pin: bool = False,
+        unpin: bool = False,
     ) -> (
         Status[Sequence[MemoryRegion]]
         | Status[Sequence[Sequence[MemoryRegion]]]
@@ -1410,6 +1445,8 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         Args:
             prefix: The prefix tokens/block hashes of the kv cache.
             query: The query tokens/block hashes of the kv cache.
+            pin: Whether to pin the memory regions after acquiring.
+            unpin: Whether to unpin the memory regions after releasing.
         Returns:
             The memory regions corresponding to the tokens.
         """
@@ -1420,7 +1457,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             * self._l2_cache_per_token_timeout_ms
         ) / 1000
         future = asyncio.run_coroutine_threadsafe(
-            self._l2_cache.acquire(prefix, query),  # type: ignore
+            self._l2_cache.acquire(prefix, query, pin, unpin),  # type: ignore
             self._event_loop,  # type: ignore
         )
         try:
@@ -1473,6 +1510,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         mr_or_handle_or_tensors: Sequence[
             torch.Tensor | MemoryRegion | KVCacheHandle
         ],
+        unpin: bool = False,
     ) -> None:
         if mr_or_handle_or_tensors is None:
             return
@@ -1480,6 +1518,8 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
             if isinstance(x, MemoryRegion):
                 x.ref_down()
             elif isinstance(x, KVCacheHandle):
+                if unpin and self._l2_cache_has_zero_copy():
+                    self._l2_cache.unpin(x)  # type: ignore
                 x.release()
 
     @nvtx_range("allocate_for", "KVCacheManager")
@@ -1547,6 +1587,7 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
     @nvtx_range("put", "KVCacheManager")
     @MeasurableBase.measure(MetricRecorder.OP.PUT)
     def put(self, *args, **kwargs) -> Status[int]:
+        kwargs, pin, _ = extract_pin_unpin_kwargs(kwargs)
         prefix, query, kv_tensors = parse_kvcache_api_args(*args, **kwargs)
 
         if not isinstance(query, TokenListView):
@@ -1586,11 +1627,9 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
         if isinstance(kv_tensors, GDRKVCacheHandle):
             assert self.feature.gdr_put, "Does not support GDR put"
 
+        # Bypass L1 if L2 cache is enabled with zero copy
         if self._l2_cache_has_zero_copy():
-            ret = len(kv_tensors) * self.block_ntokens
-            # release will trigger async seals on allocated MRs
-            kv_tensors.release()
-            return Status.ok(ret)
+            return self._l2_put(prefix, query, kv_tensors, pin)
 
         # If L1Cache is enabled, we put kv tensors to L1Cache and leverage its
         # eviction policy to asynchronously ingest kv tensors to L2Cache.
@@ -1744,9 +1783,10 @@ class GroupAwareKVCacheManager(BaseKVCacheManager):
     @nvtx_range("acquire", "GroupAwareKVCacheManager")
     @MeasurableBase.measure(MetricRecorder.OP.ACQUIRE)
     def acquire(self, *args, **kwargs) -> Status[Tuple[int, KVCacheHandle]]:
+        kwargs, pin, unpin = extract_pin_unpin_kwargs(kwargs)
         prefix, query, _ = parse_kvcache_api_args(*args, **kwargs)
 
-        status = self._group_aware_acquire_impl(prefix, query)
+        status = self._group_aware_acquire_impl(prefix, query, pin, unpin)
         if not status.is_ok():
             return Status(status)
         value = status.get()
@@ -1759,12 +1799,16 @@ class GroupAwareKVCacheManager(BaseKVCacheManager):
         self,
         prefix: KVCacheKeyTypes | None,
         query: KVCacheKeyTypes,
+        pin: bool = False,
+        unpin: bool = False,
     ) -> Status[Tuple[int, Sequence[MemoryRegion]]]:
         """Get kv tensors / cache handles.
 
         Args:
             prefix: The prefix tokens/block hashes of the kv cache.
             query: The query tokens/block hashes of the kv cache.
+            pin: Whether to pin the memory regions after acquiring.
+            unpin: Whether to unpin the memory regions after releasing.
         Returns:
             Number of tokens have been fetched from the kv cache service.
             The memory regions corresponding to the given tokens.
@@ -1784,7 +1828,9 @@ class GroupAwareKVCacheManager(BaseKVCacheManager):
             if next_tokens and len(next_tokens) >= 0:
                 # prefetch
                 super().prefetch(chunk_prefix + chunk_tokens, next_tokens)
-            status = super()._acquire_impl(chunk_prefix, chunk_tokens)
+            status = super()._acquire_impl(
+                chunk_prefix, chunk_tokens, pin=pin, unpin=unpin
+            )
             value = status.get()
             # we only care about num of blocks or if it is an error
             if status.is_ok():
@@ -1801,7 +1847,8 @@ class GroupAwareKVCacheManager(BaseKVCacheManager):
             coll_result = self._coll_tensor[0].item()
             # if any participant encountered an error
             if coll_result <= 0:
-                self._release(value)
+                # unpin the memory regions if they are pinned during acquire
+                self._release(value, unpin=pin)
                 if start > 0:
                     # we have already got some tokens, return success
                     return Status.ok((start, results))
@@ -1813,7 +1860,8 @@ class GroupAwareKVCacheManager(BaseKVCacheManager):
             elif coll_result * self.block_ntokens < len(chunk_tokens):
                 # some participants have got less tokens than others
                 results.extend(value[:coll_result])  # type: ignore
-                self._release(value[coll_result:])
+                # unpin the memory regions if they are pinned during acquire
+                self._release(value[coll_result:], unpin=pin)
                 return Status.ok(
                     (start + coll_result * self.block_ntokens, results)
                 )

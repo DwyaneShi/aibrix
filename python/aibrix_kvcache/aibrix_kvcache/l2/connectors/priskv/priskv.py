@@ -129,6 +129,7 @@ class PrisKVConnector(Connector[bytes, torch.Tensor], AsyncBase):
             rdma=True,
             mput_mget=envs.AIBRIX_KV_CACHE_OL_PRISKV_USE_MPUT_MGET,
             zero_copy=envs.AIBRIX_KV_CACHE_OL_PRISKV_USE_ZERO_COPY,
+            pin_unpin=envs.AIBRIX_KV_CACHE_OL_PRISKV_USE_PIN_UNPIN,
         )
         return feature
 
@@ -328,11 +329,13 @@ class PrisKVConnector(Connector[bytes, torch.Tensor], AsyncBase):
         return Status.ok(PrisKVZeroCopyMemoryRegion(priskv_key, priskv_mr))
 
     @Status.capture_exception
-    def _seal(self, mr: ConnectorZeroCopyMemoryRegion) -> None:
+    def _seal(self, mr: ConnectorZeroCopyMemoryRegion, pin: bool) -> None:
         """Seal an allocated memory region."""
         assert self.conn is not None
+        if not self.feature.pin_unpin:
+            assert not pin, "pin_unpin feature is not enabled"
         zc_mr = cast(PrisKVZeroCopyMemoryRegion, mr)
-        status = self.conn.seal(zc_mr._key, zc_mr._handle)
+        status = self.conn.seal(zc_mr._key, zc_mr._handle, pin)
         if status != priskv.PRISKV_STATUS.PRISKV_STATUS_OK:
             logger.error(
                 "Failed to seal memory region %s with status %s",
@@ -354,11 +357,15 @@ class PrisKVConnector(Connector[bytes, torch.Tensor], AsyncBase):
             )
 
     @Status.capture_exception
-    def _acquire(self, key: bytes) -> Status[ConnectorZeroCopyMemoryRegion]:
+    def _acquire(
+        self, key: bytes, pin: bool
+    ) -> Status[ConnectorZeroCopyMemoryRegion]:
         """Acquire a memory region for read."""
         assert self.conn is not None
+        if not self.feature.pin_unpin:
+            assert not pin, "pin_unpin feature is not enabled"
         priskv_key = self._key(key)
-        status, priskv_mr = self.conn.acquire(priskv_key)
+        status, priskv_mr = self.conn.acquire(priskv_key, pin)
         if status != priskv.PRISKV_STATUS.PRISKV_STATUS_OK:
             if status == priskv.PRISKV_STATUS.PRISKV_STATUS_NO_SUCH_KEY:
                 return Status(StatusCodes.NOT_FOUND)
@@ -371,11 +378,13 @@ class PrisKVConnector(Connector[bytes, torch.Tensor], AsyncBase):
         return Status.ok(PrisKVZeroCopyMemoryRegion(priskv_key, priskv_mr))
 
     @Status.capture_exception
-    def _release(self, mr: ConnectorZeroCopyMemoryRegion) -> None:
+    def _release(self, mr: ConnectorZeroCopyMemoryRegion, unpin: bool) -> None:
         """Release a memory region."""
         assert self.conn is not None
+        if not self.feature.pin_unpin:
+            assert not unpin, "pin_unpin feature is not enabled"
         zc_mr = cast(PrisKVZeroCopyMemoryRegion, mr)
-        status = self.conn.release(zc_mr._key, zc_mr._handle)
+        status = self.conn.release(zc_mr._key, zc_mr._handle, unpin)
         if status != priskv.PRISKV_STATUS.PRISKV_STATUS_OK:
             logger.error(
                 "Failed to release memory region %s with status %s",
