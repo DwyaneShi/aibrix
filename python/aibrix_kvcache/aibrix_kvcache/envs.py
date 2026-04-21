@@ -152,6 +152,12 @@ if TYPE_CHECKING:
         os.path.join(os.path.expanduser("~"), ".kv_cache_ol", "shfs")
     )
 
+    # JBOF Env Vars
+    AIBRIX_KV_CACHE_OL_JBOF_KV_ADDR: str = "192.168.1.100"
+    AIBRIX_KV_CACHE_OL_JBOF_KV_NQN: str = "nqn.2016-06.io.spdk:cnode1"
+    AIBRIX_KV_CACHE_OL_JBOF_KV_CORES: int = 255
+    AIBRIX_KV_CACHE_OL_JBOF_USE_IOV_API: bool = False
+
     # vLLM Integration Env Vars
     VLLM_AIBRIX_SYNC_GRANULARITY: str = "PER_OP"
 
@@ -166,9 +172,9 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
             lambda x, t: t(x),
             map(
                 str.strip,
-                os.getenv(
-                    "AIBRIX_KV_CACHE_OL_DOUBLE_GET_THRESHOLD", "4,0.1"
-                ).split(","),
+                os.getenv("AIBRIX_KV_CACHE_OL_DOUBLE_GET_THRESHOLD", "4,0.1").split(
+                    ","
+                ),
             ),
             (int, float),
         )
@@ -183,9 +189,7 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
         os.getenv("AIBRIX_KV_CACHE_OL_MAX_SEQ_LEN", "-1")
     ),
     "AIBRIX_KV_CACHE_OL_TIME_MEASUREMENT_ENABLED": lambda: (
-        os.getenv("AIBRIX_KV_CACHE_OL_TIME_MEASUREMENT_ENABLED", "1")
-        .strip()
-        .lower()
+        os.getenv("AIBRIX_KV_CACHE_OL_TIME_MEASUREMENT_ENABLED", "1").strip().lower()
         in ("1", "true")
     ),
     "AIBRIX_KV_CACHE_OL_BREAKDOWN_MEASUREMENT_ENABLED": lambda: (
@@ -195,9 +199,7 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
         in ("1", "true")
     ),
     "AIBRIX_KV_CACHE_OL_TOKEN_VALIDATION_ENABLED": lambda: (
-        os.getenv("AIBRIX_KV_CACHE_OL_TOKEN_VALIDATION_ENABLED", "0")
-        .strip()
-        .lower()
+        os.getenv("AIBRIX_KV_CACHE_OL_TOKEN_VALIDATION_ENABLED", "0").strip().lower()
         in ("1", "true")
     ),
     # ================== L1Cache Env Vars ==================
@@ -219,9 +221,7 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
     # ================== S3FIFO Env Vars ==================
     # Promotion threshold of small fifo to main fifo
     "AIBRIX_KV_CACHE_OL_S3FIFO_SMALL_TO_MAIN_PROMO_THRESHOLD": lambda: int(
-        os.getenv(
-            "AIBRIX_KV_CACHE_OL_S3FIFO_SMALL_TO_MAIN_PROMO_THRESHOLD", "1"
-        )
+        os.getenv("AIBRIX_KV_CACHE_OL_S3FIFO_SMALL_TO_MAIN_PROMO_THRESHOLD", "1")
     ),
     # Small fifo capacity ratio
     "AIBRIX_KV_CACHE_OL_S3FIFO_SMALL_FIFO_CAPACITY_RATIO": lambda: float(
@@ -232,9 +232,7 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
         os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_BACKEND", "").strip().upper()
     ),
     "AIBRIX_KV_CACHE_OL_L2_CACHE_NAMESPACE": lambda: (
-        os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_NAMESPACE", "aibrix")
-        .strip()
-        .lower()
+        os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_NAMESPACE", "aibrix").strip().lower()
     ),
     "AIBRIX_KV_CACHE_OL_L2_CACHE_COMPRESSION": lambda: (
         os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_COMPRESSION", "").strip().upper()
@@ -255,9 +253,7 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
         os.getenv("AIBRIX_KV_CACHE_OL_META_SERVICE_URL", "").strip()
     ),
     "AIBRIX_KV_CACHE_OL_META_SERVICE_CLUSTER_META_KEY": lambda: (
-        os.getenv(
-            "AIBRIX_KV_CACHE_OL_META_SERVICE_CLUSTER_META_KEY", ""
-        ).strip()
+        os.getenv("AIBRIX_KV_CACHE_OL_META_SERVICE_CLUSTER_META_KEY", "").strip()
     ),
     "AIBRIX_KV_CACHE_OL_L2_CACHE_PLACEMENT_POLICY": lambda: (
         os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_PLACEMENT_POLICY", "SIMPLE")
@@ -270,14 +266,10 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
         .upper()
     ),
     "AIBRIX_KV_CACHE_OL_L2_CACHE_INGESTION_TYPE": lambda: (
-        os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_INGESTION_TYPE", "HOT")
-        .strip()
-        .upper()
+        os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_INGESTION_TYPE", "HOT").strip().upper()
     ),
     "AIBRIX_KV_CACHE_OL_L2_CACHE_INGESTION_MAX_INFLIGHT_TOKENS": lambda: int(
-        os.getenv(
-            "AIBRIX_KV_CACHE_OL_L2_CACHE_INGESTION_MAX_INFLIGHT_TOKENS", "0"
-        )
+        os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_INGESTION_MAX_INFLIGHT_TOKENS", "0")
     ),
     "AIBRIX_KV_CACHE_OL_L2_CACHE_NUM_ASYNC_WORKERS": lambda: int(
         os.getenv("AIBRIX_KV_CACHE_OL_L2_CACHE_NUM_ASYNC_WORKERS", "8")
@@ -339,9 +331,7 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
     ),
     # ================== InfiniStore Env Vars ==================
     "AIBRIX_KV_CACHE_OL_INFINISTORE_HOST_ADDR": lambda: (
-        os.getenv(
-            "AIBRIX_KV_CACHE_OL_INFINISTORE_HOST_ADDR", "127.0.0.1"
-        ).strip()
+        os.getenv("AIBRIX_KV_CACHE_OL_INFINISTORE_HOST_ADDR", "127.0.0.1").strip()
     ),
     "AIBRIX_KV_CACHE_OL_INFINISTORE_SERVICE_PORT": lambda: int(
         os.getenv("AIBRIX_KV_CACHE_OL_INFINISTORE_SERVICE_PORT", "12345")
@@ -355,9 +345,7 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
         os.getenv("AIBRIX_KV_CACHE_OL_INFINISTORE_IB_PORT", "1")
     ),
     "AIBRIX_KV_CACHE_OL_INFINISTORE_LINK_TYPE": lambda: (
-        os.getenv(
-            "AIBRIX_KV_CACHE_OL_INFINISTORE_LINK_TYPE", "Ethernet"
-        ).strip()
+        os.getenv("AIBRIX_KV_CACHE_OL_INFINISTORE_LINK_TYPE", "Ethernet").strip()
     ),
     "AIBRIX_KV_CACHE_OL_INFINISTORE_VISIBLE_DEV_LIST": lambda: list(
         filter(
@@ -427,9 +415,7 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
     ),
     # ================== RDMA Auto-Detection Env Vars ==================
     "AIBRIX_KV_CACHE_OL_TRANSPORT_RDMA_ADDR_RANGE": lambda: (
-        os.getenv(
-            "AIBRIX_KV_CACHE_OL_TRANSPORT_RDMA_ADDR_RANGE", "::/0"
-        ).strip()
+        os.getenv("AIBRIX_KV_CACHE_OL_TRANSPORT_RDMA_ADDR_RANGE", "::/0").strip()
     ),
     # ==================== Profiling Env Vars ====================
     "AIBRIX_KV_CACHE_OL_PROFILING_ENABLED": lambda: (
@@ -452,6 +438,29 @@ kv_cache_ol_environment_variables: Dict[str, Callable[[], Any]] = {
             os.path.join(os.path.expanduser("~"), ".kv_cache_ol", "shfs"),
         )
     ),
+    # ================== JBOF Env Vars ==================
+    "AIBRIX_KV_CACHE_OL_JBOF_KV_ADDR": lambda: (
+        os.getenv(
+            "AIBRIX_KV_CACHE_OL_JBOF_KV_ADDR",
+        ).strip()
+    ),
+    "AIBRIX_KV_CACHE_OL_JBOF_KV_NQN": lambda: (
+        os.getenv(
+            "AIBRIX_KV_CACHE_OL_JBOF_KV_NQN",
+        ).strip()
+    ),
+    "AIBRIX_KV_CACHE_OL_JBOF_KV_CORES": lambda: int(
+        os.getenv(
+            "AIBRIX_KV_CACHE_OL_JBOF_KV_CORES",
+        ).strip()
+    ),
+    "AIBRIX_KV_CACHE_OL_JBOF_USE_IOV_API": lambda: (
+        os.getenv(
+            "AIBRIX_KV_CACHE_OL_JBOF_USE_IOV_API",
+        ).strip().lower()
+        in ("1", "true")
+    ),
+
     # Specify the sync granularity used by AIBrix connectors. Please refer to
     # AIBrixOffloadingConnectorSyncGranularity for more details.
     "VLLM_AIBRIX_SYNC_GRANULARITY": lambda: os.environ.get(

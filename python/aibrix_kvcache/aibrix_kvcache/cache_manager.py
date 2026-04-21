@@ -1486,6 +1486,20 @@ class BaseKVCacheManager(KVCacheManager, MeasurableBase):
     def allocate_for(self, *args, **kwargs) -> Status[KVCacheHandle]:
         prefix, query, _ = parse_kvcache_api_args(*args, **kwargs)
 
+        if (
+            self._l2_cache is not None
+            and self._l2_cache._backend is not None
+            and self._l2_cache._backend.name.upper() == "JBOF"
+        ):
+            assert MemoryRegion.use_compact_layout()
+            nblocks = len(query) // self.block_ntokens
+            # Uses aligned block size for JBOF connector
+            from aibrix_kvcache.l2.connectors.jbof import JBOF_VALUE_SIZE_ALIGNMENT
+            sizes = tuple(
+                round_up(self.block_nbytes, JBOF_VALUE_SIZE_ALIGNMENT)
+                for _ in range(nblocks)
+            )
+
         # Bypass L1 if L2 cache is enabled with zero copy
         if self._l2_cache_has_zero_copy():
             return self._l2_allocate_for(prefix, query)

@@ -112,6 +112,7 @@ class L2Cache(MeasurableBase):
             block_spec_signature=block_spec_signature,
             key_builder_signature=key_builder_signature,
             layout_signature=layout_signature,
+            block_nbytes=self.block_nbytes,
         )
 
         if meta_service is None:

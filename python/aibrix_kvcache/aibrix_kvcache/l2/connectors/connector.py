@@ -57,6 +57,7 @@ class ConnectorConfig:
     block_spec_signature: str = ""
     key_builder_signature: str = ""
     layout_signature: str = ""
+    block_nbytes: int = 0
 
 
 @dataclass
@@ -134,6 +135,12 @@ class Connector(Generic[K, V]):
             from .shfs import SHFSConnector
 
             return SHFSConnector.from_envs(conn_id, executor, **kwargs)
+        elif backend_name == "JBOF":
+            from .jbof import JBOFConnector
+
+            return JBOFConnector.from_envs(
+                conn_id, executor, block_nbytes=config.block_nbytes, **kwargs
+            )
         else:
             raise ValueError(f"Unknown connector type: {backend_name}")
 
