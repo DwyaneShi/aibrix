@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import hashlib
+import time
 from concurrent.futures import Executor
 from dataclasses import dataclass
+from typing import List
 
 import kv_client
 import torch
@@ -31,6 +33,8 @@ logger = getLogger(__name__)
 
 
 JBOF_VALUE_SIZE_ALIGNMENT = 4096
+JBOF_IOV_CHUNK_SIZE = 1048576
+JBOF_PUT_NUM_RETRIES = 6
 
 
 @dataclass
@@ -84,14 +88,16 @@ class JBOFConnector(Connector[bytes, torch.Tensor], AsyncBase):
 
     @property
     def feature(self) -> ConnectorFeature:
-        feature = ConnectorFeature()
+        feature = ConnectorFeature(
+            rdma=True,  # trigger mr registration
+        )
         return feature
 
     def __del__(self) -> None:
         self.close()
 
     def _key(self, key: bytes) -> bytes:
-        # JBOF supports max 16-byte keys. 
+        # JBOF supports max 16-byte keys.
         # MD5 produces exactly 16 bytes (128 bits).
         jbof_key = key.hex() + self.key_suffix
         return hashlib.md5(jbof_key.encode('utf-8')).digest()
@@ -101,7 +107,7 @@ class JBOFConnector(Connector[bytes, torch.Tensor], AsyncBase):
         self.rt = kv_client.spdk_initiator_start(
             self.config.kv_addr,
             self.config.kv_nqn,
-            hex(self.config.kv_cores),
+            hex(self.config.kv_cores), # Pass core mask as hex string, e.g. "0xff"
             self.value_size,
         )
         assert self.rt is not None
@@ -109,7 +115,18 @@ class JBOFConnector(Connector[bytes, torch.Tensor], AsyncBase):
 
     @Status.capture_exception
     def close(self) -> Status:
+        if self.rt is not None and hasattr(kv_client, "spdk_initiator_stop"):
+            kv_client.spdk_initiator_stop(self.rt)
         self.rt = None
+        return Status.ok()
+
+    @Status.capture_exception
+    def register_slabs(self, slabs: List[torch.Tensor]) -> Status:
+        for slab in slabs:
+            addr = slab.data_ptr()
+            length = slab.numel() * slab.itemsize
+            kv_client.mem_register(addr, length)
+            logger.info(f"Registered SPDK DMA memory for slab: ptr={hex(addr)}, size={length}")
         return Status.ok()
 
     @Status.capture_exception
@@ -125,7 +142,23 @@ class JBOFConnector(Connector[bytes, torch.Tensor], AsyncBase):
         """Get a value."""
         assert self.rt is not None
         if self.config.use_iov_api:
-            raise NotImplementedError("IOV API is not supported.")
+            tensor = mr.to_tensor(torch.uint8)
+            arr = tensor.numpy()
+            mv = memoryview(arr)
+            total = self.value_size
+            if len(mv) < total:
+                val = kv_client.get(self.rt, self._key(key), self.value_size)
+                if val is None:
+                    return Status(StatusCodes.NOT_FOUND)
+                mr.fill(val[: self.config.block_nbytes])
+                return Status.ok()
+
+            bufs = [mv[i : i + JBOF_IOV_CHUNK_SIZE] for i in range(0, total, JBOF_IOV_CHUNK_SIZE)]
+            ok = kv_client.getv_into(self.rt, self._key(key), bufs)
+            if ok:
+                return Status.ok()
+
+            return Status(StatusCodes.NOT_FOUND)
         else:
             val = kv_client.get(self.rt, self._key(key), self.value_size)
             if val is None:
@@ -139,9 +172,31 @@ class JBOFConnector(Connector[bytes, torch.Tensor], AsyncBase):
         """Put a key value pair"""
         assert self.rt is not None
         if self.config.use_iov_api:
-            raise NotImplementedError("IOV API is not supported.")
+            tensor = mr.to_tensor(torch.uint8)
+            arr = tensor.numpy()
+            mv = memoryview(arr)
+            total = self.value_size
+            if len(mv) < total:
+                value = mr.tobytes()
+                kv_client.put(self.rt, self._key(key), value)
+                return Status.ok()
+
+            bufs = [mv[i : i + JBOF_IOV_CHUNK_SIZE] for i in range(0, total, JBOF_IOV_CHUNK_SIZE)]
+            last_exc: Exception | None = None
+            for attempt in range(JBOF_PUT_NUM_RETRIES):
+                try:
+                    kv_client.putv(self.rt, self._key(key), bufs)
+                    return Status.ok()
+                except Exception as e:
+                    last_exc = e
+                    logger.error(f"putv exception: {e}")
+                    time.sleep(0.01 * (attempt + 1))
+
+            assert last_exc is not None
+            raise last_exc
         else:
-            kv_client.put(self.rt, self._key(key), mr.tobytes())
+            value = mr.tobytes()
+            kv_client.put(self.rt, self._key(key), value)
             return Status.ok()
 
     @Status.capture_exception
