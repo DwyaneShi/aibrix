@@ -14,17 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package types
+package config
 
-// Only used for extending the custom resource credentials.
-type ExtensionResourceCredentials struct {
-	// TCE contains TCE credentials.
-	// Required when provider is "tce".
-	TCE *TCECredential `json:"tce,omitempty"`
-}
-
-// TCECredential contains TCE credentials.
-type TCECredential struct {
-	// Use AIBrix platform's PSM if not set.
-	PSM *string `json:"psm,omitempty"`
-}
+var ProdI18NResourceManagerAPI = "https://resource-manager-i18n.byted.org"
+var ProdI18NAuthRegion = "i18n"
+var ProdI18NByteQuotaAPI = "http://tce-planning-i18n.byted.org"
+var ProdI18NJwtAuthUrlPrefix = "https://cloud-i18n.bytedance.net/auth"
+var ProdI18NScheduledMatchFE = "https://cloud-eu.tiktok-row.net/quota/scheduled-plan"

@@ -14,17 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package types
+package scheduled_plan_types
 
-// Only used for extending the custom resource credentials.
-type ExtensionResourceCredentials struct {
-	// TCE contains TCE credentials.
-	// Required when provider is "tce".
-	TCE *TCECredential `json:"tce,omitempty"`
-}
+import "github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/resource_manager_client/supply_controller_types"
 
-// TCECredential contains TCE credentials.
-type TCECredential struct {
-	// Use AIBrix platform's PSM if not set.
-	PSM *string `json:"psm,omitempty"`
+type Resource struct {
+	Key             string                                  `json:"cluster"`
+	PhysicalCluster string                                  `json:"-"`
+	Dc              string                                  `json:"-"`
+	ClusterReource  supply_controller_types.ClusterResource `json:"clusterResource"`
 }

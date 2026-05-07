@@ -25,3 +25,7 @@ package resource_manager
 //
 // Upstream it intentionally does nothing; built-in providers are linked from
 // resource_manager.go.
+
+import (
+	_ "github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce"
+)

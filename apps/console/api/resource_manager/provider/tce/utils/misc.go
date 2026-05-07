@@ -14,17 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package types
+package utils
 
-// Only used for extending the custom resource credentials.
-type ExtensionResourceCredentials struct {
-	// TCE contains TCE credentials.
-	// Required when provider is "tce".
-	TCE *TCECredential `json:"tce,omitempty"`
+func ToPtr[T any](v T) *T {
+	return &v
 }
 
-// TCECredential contains TCE credentials.
-type TCECredential struct {
-	// Use AIBrix platform's PSM if not set.
-	PSM *string `json:"psm,omitempty"`
+func IntPtrToIntOrZero(iPtr *int) int {
+	if iPtr == nil {
+		return 0
+	}
+	return *iPtr
 }

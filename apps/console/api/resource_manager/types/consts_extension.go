@@ -16,15 +16,6 @@ limitations under the License.
 
 package types
 
-// Only used for extending the custom resource credentials.
-type ExtensionResourceCredentials struct {
-	// TCE contains TCE credentials.
-	// Required when provider is "tce".
-	TCE *TCECredential `json:"tce,omitempty"`
-}
-
-// TCECredential contains TCE credentials.
-type TCECredential struct {
-	// Use AIBrix platform's PSM if not set.
-	PSM *string `json:"psm,omitempty"`
-}
+const (
+	ResourceProvisionTypeTCE ResourceProvisionType = "tce"
+)

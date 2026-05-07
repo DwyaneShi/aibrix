@@ -14,17 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package types
+package resource_pool_types
 
-// Only used for extending the custom resource credentials.
-type ExtensionResourceCredentials struct {
-	// TCE contains TCE credentials.
-	// Required when provider is "tce".
-	TCE *TCECredential `json:"tce,omitempty"`
+type PackageSpec struct {
+	Available map[string]int64 `json:"available"`
+	Usage     map[string]int64 `json:"usage"`
 }
 
-// TCECredential contains TCE credentials.
-type TCECredential struct {
-	// Use AIBrix platform's PSM if not set.
-	PSM *string `json:"psm,omitempty"`
+type PackageSupply struct {
+	Supply      map[string]int64 `json:"supply"`
+	Allocatable map[string]int64 `json:"allocatable"`
 }
