@@ -40,7 +40,7 @@ func TestTCEProvisioner_ProvisionListRelease(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := context.Background()
-	s := store.NewMemoryStore()
+	s := store.NewMemoryStore(nil)
 
 	mockRMClient := resource_manager_client.NewMockClient(ctrl)
 	mockBQClient := bytequota_client.NewMockClient(ctrl)
@@ -200,7 +200,7 @@ func TestTCEProvisioner_ProvisionFailed(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := context.Background()
-	s := store.NewMemoryStore()
+	s := store.NewMemoryStore(nil)
 
 	mockRMClient := resource_manager_client.NewMockClient(ctrl)
 	mockBQClient := bytequota_client.NewMockClient(ctrl)
@@ -286,7 +286,7 @@ func TestTCEProvisioner_ReleaseIdempotent(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := context.Background()
-	s := store.NewMemoryStore()
+	s := store.NewMemoryStore(nil)
 
 	mockRMClient := resource_manager_client.NewMockClient(ctrl)
 	mockBQClient := bytequota_client.NewMockClient(ctrl)
@@ -369,7 +369,7 @@ func TestTCEProvisioner_RealClient(t *testing.T) {
 	t.Skip("Skipping test with real client. Remove this line to run manually.")
 
 	ctx := context.Background()
-	s := store.NewMemoryStore()
+	s := store.NewMemoryStore(nil)
 
 	clientset, err := newTCEClientset()
 	require.NoError(t, err)

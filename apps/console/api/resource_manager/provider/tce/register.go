@@ -17,6 +17,7 @@ limitations under the License.
 package tce
 
 import (
+	"github.com/vllm-project/aibrix/apps/console/api/error_injection"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/catalog"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provisioner"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
@@ -27,7 +28,7 @@ import (
 // configured via region config; errors surface when the provisioner/catalog
 // is actually constructed with missing or invalid credentials.
 func init() {
-	provisioner.Register(types.ResourceProvisionTypeTCE, func(s store.Store) (provisioner.Provisioner, error) {
+	provisioner.Register(types.ResourceProvisionTypeTCE, func(s store.Store, _ error_injection.Injector) (provisioner.Provisioner, error) {
 		return newProvisioner(s)
 	})
 	catalog.Register(types.ResourceProvisionTypeTCE, func() (catalog.Catalog, error) {
