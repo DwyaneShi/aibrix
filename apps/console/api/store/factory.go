@@ -29,6 +29,7 @@ import (
 //	sqlite:///absolute/path.db                         → same, URL form
 //	sqlite:file:/path/to/db?cache=shared               → raw SQLite driver DSN
 //	mysql://user:pass@host:3306/db?param=value         → MySQL via go-sql-driver/mysql
+//	byterds://@psm/db?param=value                      → ByteRDS via consul service discovery
 //	memory://                                          → in-process in-memory SQLite (test/throwaway)
 //
 // The "sqlite:" prefix is stripped and the remainder is forwarded to the
@@ -57,8 +58,10 @@ func NewFromURI(uri, secretKey string) (Store, error) {
 		return NewMemoryStore(), nil
 	case "mysql":
 		return NewMySQLStore(mysqlURIToDSN(u), secretKey)
+	case "byterds":
+		return NewByteRDSStore(mysqlURIToDSN(u), secretKey)
 	default:
-		return nil, fmt.Errorf("unsupported store scheme %q (URI %q); use sqlite:, mysql://, or memory://", u.Scheme, uri)
+		return nil, fmt.Errorf("unsupported store scheme %q (URI %q); use sqlite:, mysql://, byterds://, or memory://", u.Scheme, uri)
 	}
 }
 
