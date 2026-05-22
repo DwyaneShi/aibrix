@@ -49,6 +49,9 @@ func NewByteRDSStore(dsn, encryptionKey string, injector error_injection.Injecto
 		dsnParams.Set(k, v)
 	}
 
+	cluster := dsnParams.Get("cluster")
+	dsnParams.Del("cluster")
+
 	if cfg.ReadTimeout == 0 {
 		cfg.ReadTimeout = defaultTimeout
 	}
@@ -69,6 +72,11 @@ func NewByteRDSStore(dsn, encryptionKey string, injector error_injection.Injecto
 				conf.ReadTimeout = cfg.ReadTimeout
 				conf.WriteTimeout = cfg.WriteTimeout
 				conf.Timeout = cfg.Timeout
+				// cluster pins consul service discovery to a specific IDC,
+				// e.g. "lf"; sourced from the DSN query parameter `cluster`.
+				if cluster != "" {
+					conf.Cluster = cluster
+				}
 			}).WithReadReplicas(),
 			bytedgorm.WithDefaults(),
 			bytedgorm.ConnPool{MaxIdleConns: maxIdleConns, MaxOpenConns: maxOpenConns},
