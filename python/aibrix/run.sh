@@ -75,19 +75,24 @@ else
 fi
 
 
-# Translate env-provided CLI flags before resolving the entry point so the
-# final exec path stays close to the previous structure.
-if [[ -n "${EXTRA_ARGS:-}" ]]; then
-  log "EXTRA_ARGS=${EXTRA_ARGS} -> appending raw args"
-  # EXTRA_ARGS is intended for trusted deployment-time values.
-  # shellcheck disable=SC2294
-  eval "EXTRA_ARGS=(${EXTRA_ARGS})"
-else
-  EXTRA_ARGS=()
-fi
+# Translate select env vars into CLI flags. The metadata app's CLI options
+# don't go through pydantic-settings, so this layer bridges deploy-time env
+# (k8s manifest / docker-compose) to argparse without code changes.
+EXTRA_ARGS=()
+case "${DRY_RUN:-0}" in
+  1|true|TRUE|True|yes|YES|Yes)
+    EXTRA_ARGS+=(--dry-run)
+    log "DRY_RUN=${DRY_RUN} -> appending --dry-run"
+    ;;
+  *)
+    EXTRA_ARGS+=(--enable-redis-job)
+    log "DRY_RUN not set -> appending --enable-redis-job by default"
+    ;;
+esac
 
- Prefer the generated console_script when its bin dir is on PATH; otherwise
-# invoke the module form so we don't depend on PATH wiring.
+
+ # Prefer the generated console_script when its bin dir is on PATH; otherwise
+ # invoke the module form so we don't depend on PATH wiring.
 if command -v aibrix_metadata >/dev/null 2>&1; then
   ENTRY=("aibrix_metadata")
   log "entry point: $(command -v aibrix_metadata)"

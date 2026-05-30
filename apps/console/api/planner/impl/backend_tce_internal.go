@@ -1,0 +1,109 @@
+/*
+Copyright 2026 The Aibrix Team.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// Provides the TCE plannerBackend. It self-registers via init() into the
+// backendRegistry defined in backend.go; newPlannerBackend resolves it for
+// rmtypes.ResourceProvisionTypeTCE.
+
+package impl
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"k8s.io/klog/v2"
+
+	plannerapi "github.com/vllm-project/aibrix/apps/console/api/planner/api"
+	plannerclient "github.com/vllm-project/aibrix/apps/console/api/planner/client"
+	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provisioner"
+	rmtypes "github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
+)
+
+func init() {
+	RegisterBackend(rmtypes.ResourceProvisionTypeTCE, func(provisioner.Provisioner) plannerBackend {
+		return &tcePlannerBackend{}
+	})
+}
+
+type tcePlannerBackend struct{}
+
+func (b *tcePlannerBackend) ValidateRequest(req *plannerapi.EnqueueRequest) error {
+	if req.ModelTemplate == nil || req.ModelTemplate.Name == "" {
+		return fmt.Errorf("%w: missing model_template", plannerapi.ErrInvalidJob)
+	}
+	return nil
+}
+
+func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueRequest) (rmtypes.ResourceProvisionSpec, string, int, error) {
+	gpuType, gpusPerReplica, err := decodeAcceleratorFromTemplate(req.ModelTemplate)
+	if err != nil {
+		return rmtypes.ResourceProvisionSpec{}, "", 0, err
+	}
+
+	startTime := time.Now().UTC().Add(2 * time.Minute)
+	endTime := startTime.Truncate(time.Hour).Add(time.Hour)
+	spec := rmtypes.ResourceProvisionSpec{
+		Credential: rmtypes.ResourceCredential{
+			Provider: rmtypes.ResourceProvisionTypeTCE,
+			ExtensionResourceCredentials: rmtypes.ExtensionResourceCredentials{
+				TCE: &rmtypes.TCECredential{},
+			},
+		},
+		Groups: &[]rmtypes.ResourceGroupSpec{buildProvisionGroupPlan(gpuType, gpusPerReplica)},
+		TimeWindow: &rmtypes.TimeWindow{
+			StartTime: startTime,
+			EndTime:   &endTime,
+		},
+	}
+	return spec, gpuType, gpusPerReplica, nil
+}
+
+func (b *tcePlannerBackend) LogProvisionResponse(jobID string, prov *rmtypes.ProvisionResult, spec rmtypes.ResourceProvisionSpec) {
+	if prov == nil || prov.TCE == nil {
+		return
+	}
+	klog.Infof("[planner] rm_response job_id=%q provision_id=%q status=%q provider=%q match_id=%q match_order_url=%q",
+		jobID, prov.ProvisionID, prov.Status, spec.Credential.Provider, prov.TCE.MatchId, prov.TCE.MatchOrderUrl)
+}
+
+// logProvisionReady logs the TCE-specific detail of a ready provision.
+// Folded out of plannerBackend; invoked by BuildDecision.
+func (b *tcePlannerBackend) logProvisionReady(prov *rmtypes.ProvisionResult) {
+	if prov == nil || prov.TCE == nil {
+		return
+	}
+	var groupResults string
+	if prov.TCE.GroupResults != nil {
+		if payload, err := json.Marshal(prov.TCE.GroupResults); err == nil {
+			groupResults = string(payload)
+		} else {
+			groupResults = fmt.Sprintf("<marshal error: %v>", err)
+		}
+	}
+	klog.Infof("[planner] rm_ready provision_id=%q status=%q match_id=%q match_order_url=%q group_results=%s",
+		prov.ProvisionID, prov.Status, prov.TCE.MatchId, prov.TCE.MatchOrderUrl, groupResults)
+}
+
+func (b *tcePlannerBackend) BuildDecision(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult, gpuType string, gpusPerReplica int) plannerclient.PlannerDecision {
+	b.logProvisionReady(prov)
+	dec := buildTCEDecision(prov, gpuType, gpusPerReplica)
+	if spec.TimeWindow != nil && spec.TimeWindow.EndTime != nil {
+		dec.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
+	}
+	return dec
+}
