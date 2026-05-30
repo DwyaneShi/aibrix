@@ -200,6 +200,8 @@ async def lifespan(app: FastAPI):
 
     if hasattr(app.state, "httpx_client_wrapper"):
         app.state.httpx_client_wrapper.start()
+    if getattr(app.state, "model_discovery", None) is not None:
+        app.state.model_discovery.start()
     if hasattr(app.state, "batch_driver"):
         await app.state.batch_driver.start()
     yield
@@ -208,6 +210,8 @@ async def lifespan(app: FastAPI):
     logger.info("Finalizing FastAPI app...")
     if hasattr(app.state, "batch_driver"):
         await app.state.batch_driver.stop()
+    if getattr(app.state, "model_discovery", None) is not None:
+        await app.state.model_discovery.stop()
     if hasattr(app.state, "httpx_client_wrapper"):
         await app.state.httpx_client_wrapper.stop()
     if hasattr(app.state, "metadata_store"):
@@ -275,6 +279,13 @@ def build_app(args: argparse.Namespace, params={}):
             config.load_kube_config()
 
     app.state.httpx_client_wrapper = HTTPXClientWrapper()
+    try:
+        from aibrix.metadata.core import ConsulDiscoveryService
+
+        app.state.model_discovery = ConsulDiscoveryService()
+    except ImportError:
+        app.state.model_discovery = None
+        logger.info("Model discovery (Consul) unavailable; internal routing disabled")
 
     # Normalize HTTPException responses to OpenAI's top-level
     # ``{"error": {message, type, param, code}}`` shape so that the
@@ -397,6 +408,10 @@ def build_app(args: argparse.Namespace, params={}):
         # The construction of context should before any k8s dependent components'
         # (e.g., k8s job execution) initialization.
         infrastructure_context = _load_batch_k8s_context(args)
+        infrastructure_context.httpx_client_wrapper = app.state.httpx_client_wrapper
+        infrastructure_context.model_discovery = getattr(
+            app.state, "model_discovery", None
+        )
         app.state.infrastructure_context = infrastructure_context
         app.state.template_registry = infrastructure_context.template_registry
         app.state.profile_registry = infrastructure_context.profile_registry

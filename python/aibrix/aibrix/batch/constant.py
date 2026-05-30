@@ -47,3 +47,8 @@ BATCH_OPTS_CRASH_AFTER_FINALIZE_SHUTDOWN = "crash_after_finalize_shutdown"
 
 # Runtime selection moved to the RuntimeTarget enum
 # (aibrix.batch.job_entity) and the runtime registry keys.
+
+try:
+    from aibrix.batch.internal_constant import *  # noqa: F401,F403
+except ImportError:
+    pass

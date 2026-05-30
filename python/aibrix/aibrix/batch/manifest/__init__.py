@@ -20,6 +20,7 @@ from aibrix.batch.manifest.engine_adapter import (
     UnsupportedEngineError,
     build_engine_args,
 )
+from aibrix.batch.manifest.octagram_renderer import OctagramManifestRenderer
 from aibrix.batch.manifest.renderer import (
     EndpointNotSupported,
     ForbiddenOverride,
@@ -34,6 +35,7 @@ from aibrix.batch.manifest.storage_env import build_metastore_env, build_storage
 __all__ = [
     "JobManifestRenderer",
     "DeploymentManifestRenderer",
+    "OctagramManifestRenderer",
     "RenderError",
     "TemplateNotFound",
     "ProfileNotFound",

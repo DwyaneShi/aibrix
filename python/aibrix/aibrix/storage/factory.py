@@ -94,6 +94,16 @@ def create_storage(
         secret_key = kwargs.get("secret_key") or envs.STORAGE_TOS_SECRET_KEY
         endpoint = kwargs.get("endpoint") or envs.STORAGE_TOS_ENDPOINT
         region = kwargs.get("region") or envs.STORAGE_TOS_REGION
+        force_volcano = bool(
+            kwargs.get("force_volcano")
+            if "force_volcano" in kwargs
+            else os.getenv("PAAS_CLOUD_ENV") == "VOLCANO"
+        )
+        enable_crc = bool(
+            kwargs.get("enable_crc")
+            if "enable_crc" in kwargs
+            else envs.STORAGE_TOS_ENABLE_CRC
+        )
 
         if not bucket_name:
             raise ValueError("bucket_name is required for TOS storage")
@@ -106,23 +116,39 @@ def create_storage(
         if not region:
             raise ValueError("region is required for TOS storage")
 
+        from aibrix.storage.bytetos import TOSStorage
+
         return TOSStorage(
             bucket_name=bucket_name,
             access_key=access_key,
             secret_key=secret_key,
             endpoint=endpoint,
             region=region,
+            force_volcano=force_volcano,
+            enable_crc=enable_crc,
             config=config,
         )
 
     elif storage_type == StorageType.REDIS:
+        db = kwargs.get("db", 0) or envs.STORAGE_REDIS_DB
+        redis_psm = kwargs.get("redis_psm") or getattr(envs, "STORAGE_REDIS_PSM", None)
+
+        if redis_psm:
+            from aibrix.storage.byteredis import RedisStorage as _BytedRedisStorage
+
+            return _BytedRedisStorage(redis_psm, db=db, config=config)
+
         from aibrix.storage.redis import RedisStorage
 
-        host = kwargs.get("host") or envs.STORAGE_REDIS_HOST or "localhost"
-        port = kwargs.get("port") or envs.STORAGE_REDIS_PORT or 6379
-        db = kwargs.get("db", 0) or envs.STORAGE_REDIS_DB
-        password = kwargs.get("password") or envs.STORAGE_REDIS_PASSWORD
-
+        host = (
+            kwargs.get("host")
+            or getattr(envs, "STORAGE_REDIS_HOST", None)
+            or "localhost"
+        )
+        port = kwargs.get("port") or getattr(envs, "STORAGE_REDIS_PORT", None) or 6379
+        password = kwargs.get("password") or getattr(
+            envs, "STORAGE_REDIS_PASSWORD", None
+        )
         return RedisStorage(
             config=config,
             host=host,

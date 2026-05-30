@@ -22,6 +22,7 @@ from aibrix.batch.job_entity.aibrix_metadata import (
     ResolvedModelTemplate,
     ResourceAllocation,
     ResourceDetail,
+    ResourceRequirement,
     RuntimeSpec,
     RuntimeTarget,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "ClientRetryPolicy",
     "ResolvedModelTemplate",
     "ResourceDetail",
+    "ResourceRequirement",
     "BatchJob",
     "BatchJobEndpoint",
     "BatchJobSpec",

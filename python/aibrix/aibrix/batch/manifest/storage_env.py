@@ -156,6 +156,15 @@ def _redis_env() -> List[Dict[str, Any]]:
     no-auth dev setups are unchanged. A partial config, or a metastore password
     with no secret ref, is logged as a warning.
     """
+    # Internal builds inject BytedRedis/Consul env via a separate module.
+    if getattr(envs, "STORAGE_REDIS_PSM", None):
+        try:
+            from aibrix.batch.manifest.internal_storage_env import redis_env
+
+            return redis_env()
+        except ImportError:
+            pass
+
     worker_host = (
         os.getenv("WORKER_REDIS_HOST")
         or envs.STORAGE_REDIS_HOST

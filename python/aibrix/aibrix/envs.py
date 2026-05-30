@@ -143,3 +143,9 @@ INFERENCE_ENGINE_ENDPOINT = os.getenv(
     "INFERENCE_ENGINE_ENDPOINT", "http://localhost:8000"
 )
 INFERENCE_TASK_TIMEOUT = int(os.getenv("INFERENCE_TASK_TIMEOUT", "600"))
+
+# Internal-only env vars (ByteDance infra); no-op in OSS builds where the module is absent.
+try:
+    from aibrix.internal_envs import *  # noqa: F401,F403
+except ImportError:
+    pass

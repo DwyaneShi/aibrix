@@ -55,7 +55,7 @@ aibrix_gen_secrets = 'scripts.generate_secrets:main'
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
 huggingface-hub = "^0.24.6"
-tos = "2.8.0"
+tos = ">=2.8.1,<2.9.0"
 boto3 = "^1.35.5"
 google-cloud-storage = "^2.10.0"
 fastapi = "^0.112.2"
@@ -67,12 +67,13 @@ httpx = "^0.27.2"
 asyncssh = "^2.18.0"
 hf-transfer = "^0.1.8"
 types-redis = "^4.6.0.20241004"
-redis = "^5.2.0"
+redis = "^3.5.1"
 kubernetes = "^31.0.0"
 aiohttp = "^3.11.7"
 filelock = "^3.16.1"
 structlog = "^24.4.0"
 pydantic-settings = "^2.6.1"
+kopf = {extras = ["uvloop"], version = ">=1.37.2,<2.0.0,!=1.44.3"}
 PyYAML = "^6.0.1"
 types-PyYAML = "^6.0.12.20240917"
 python-multipart = "^0.0.20"
@@ -102,6 +103,19 @@ pytest-trio = "0.8.0"
 pytest-twisted = "1.14.3"
 twisted = "25.5.0"
 openai = "^2.32.0"
+
+
+[tool.poetry.group.internal]
+optional = true
+
+[tool.poetry.group.internal.dependencies]
+bytedtos = { version = "2.0.9", source = "bytedpypi" }
+bytedredis = { version = "*", source = "bytedpypi" }
+
+[[tool.poetry.source]]
+name = "bytedpypi"
+url = "https://bytedpypi.byted.org/simple"
+priority = "supplemental"
 
 [build-system]
 requires = ["poetry-core", "poetry-dynamic-versioning"]

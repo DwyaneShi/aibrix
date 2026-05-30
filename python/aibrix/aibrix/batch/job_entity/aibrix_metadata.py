@@ -2,7 +2,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
+
+from aibrix.logger import init_logger
 
 from aibrix.batch.job_entity.base import _Lenient, _Strict
 
@@ -47,11 +49,82 @@ class RuntimeSpec(_Lenient):
     target: str
     options: Dict[str, Any] = Field(default_factory=dict)
 
+logger = init_logger(__name__)
+
+
+class ResourceRequirement(_Lenient):
+    accelerator_type: Optional[str] = None
+    accelerator_category: Optional[str] = None
+    cpu: Optional[str] = None
+    memory: Optional[str] = None
+    accelerator_count: Optional[int] = None
+    replica: Optional[int] = None
+    name: str = "default"
+
 
 class ResourceDetail(_Lenient):
+    provider: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("provider", "resource_type"),
+        serialization_alias="provider",
+    )
     endpoint_cluster: Optional[str] = None
-    gpu_type: Optional[str] = None
-    replica: Optional[int] = None
+    replica: Optional[int] = None  # back-compat
+    resource_pool_name: Optional[str] = None
+    salemode: Optional[str] = None
+    qos_level: Optional[str] = None
+    logical_cluster: Optional[str] = None
+    resources: Optional[List[ResourceRequirement]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_resource_shape(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+
+        payload = dict(value)
+        if "provider" not in payload and "resource_type" in payload:
+            payload["provider"] = payload["resource_type"]
+
+        if "resources" not in payload:
+            accelerator_type = payload.get("gpu_type")
+            replica = payload.get("worker_num")
+            if accelerator_type is not None or replica is not None:
+                resource = {"name": payload.get("name", "default")}
+                if accelerator_type is not None:
+                    resource["accelerator_type"] = accelerator_type
+                if replica is not None:
+                    resource["replica"] = replica
+                payload["resources"] = [resource]
+
+        return payload
+
+    @property
+    def resource_type(self) -> str:
+        return self.provider or ""
+
+    @property
+    def resource(self) -> ResourceRequirement:
+        if not self.resources or len(self.resources) == 0:
+            raise ValueError("no resource found in resource_details")
+        elif len(self.resources) > 1:
+            logger.warning(
+                f"only one resource is expected for provider {self.provider}."
+            )
+
+        return self.resources[0]
+
+    @property
+    def gpu_type(self) -> Optional[str]:
+        if not self.resources:
+            return None
+        return self.resource.accelerator_type
+
+    @property
+    def worker_num(self) -> int:
+        if not self.resources:
+            return 0
+        return self.resource.replica or 0
 
 
 class ResourceAllocation(_Lenient):
