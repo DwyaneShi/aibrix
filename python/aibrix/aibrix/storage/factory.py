@@ -87,8 +87,6 @@ def create_storage(
         )
 
     elif storage_type == StorageType.TOS:
-        from aibrix.storage.tos import TOSStorage
-
         bucket_name = kwargs.get("bucket_name") or envs.STORAGE_TOS_BUCKET
         access_key = kwargs.get("access_key") or envs.STORAGE_TOS_ACCESS_KEY
         secret_key = kwargs.get("secret_key") or envs.STORAGE_TOS_SECRET_KEY

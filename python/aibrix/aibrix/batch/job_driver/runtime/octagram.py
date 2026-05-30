@@ -248,11 +248,20 @@ class OctagramRuntime(RuntimeBase):
     async def _apply_workload(
         self, cluster: str, namespace: str, workload: dict[str, Any]
     ) -> None:
-        response = await self._octagram_request(
-            "POST",
-            self._workload_path(cluster, namespace, workload["metadata"]["name"]),
-            json=workload,
-        )
+        try:
+            response = await self._octagram_request(
+                "POST",
+                self._workload_path(cluster, namespace, workload["metadata"]["name"]),
+                json=workload,
+            )
+        except httpx.HTTPStatusError as ex:
+            raise BatchJobError(
+                code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
+                message=(
+                    "Octagram workload create failed "
+                    f"({ex.response.status_code}): {ex.response.text}"
+                ),
+            ) from ex
         if response.get("error"):
             raise BatchJobError(
                 code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
@@ -266,10 +275,19 @@ class OctagramRuntime(RuntimeBase):
         while True:
             if self._delete_requested.is_set():
                 raise asyncio.CancelledError
-            workload = await self._octagram_request(
-                "GET",
-                self._workload_path(cluster, namespace, workload_name),
-            )
+            try:
+                workload = await self._octagram_request(
+                    "GET",
+                    self._workload_path(cluster, namespace, workload_name),
+                )
+            except httpx.HTTPStatusError as ex:
+                raise BatchJobError(
+                    code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
+                    message=(
+                        "Octagram workload status check failed "
+                        f"({ex.response.status_code}): {ex.response.text}"
+                    ),
+                ) from ex
             workload_data = self._unwrap_octagram_data(workload)
             status = workload_data.get("status", {})
             phase = status.get("phase")
@@ -335,6 +353,12 @@ class OctagramRuntime(RuntimeBase):
     async def _octagram_request(
         self, method: str, url: str, **kwargs: Any
     ) -> dict[str, Any]:
+        logger.info(
+            "octagram request",
+            method=method,
+            url=url,
+            body=kwargs.get("json"),
+        )  # type: ignore[call-arg]
         if (
             self._httpx_client_wrapper is not None
             and self._httpx_client_wrapper.async_client is not None
@@ -345,7 +369,17 @@ class OctagramRuntime(RuntimeBase):
         else:
             async with httpx.AsyncClient() as client:
                 response = await client.request(method, url, **kwargs)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError:
+            logger.error(
+                "octagram request failed",
+                method=method,
+                url=url,
+                status_code=response.status_code,
+                body=response.text,
+            )  # type: ignore[call-arg]
+            raise
         return response.json()
 
     @staticmethod

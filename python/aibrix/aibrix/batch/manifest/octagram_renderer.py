@@ -678,7 +678,9 @@ class OctagramManifestRenderer(_RendererSupport):
     ) -> Tuple[str, str]:
         if not endpoint_cluster:
             return "", ""
-        parts = endpoint_cluster.rsplit("-", 1)
+        # Lower-case before splitting: consul cluster lookup is case-sensitive
+        # and the upstream endpoint_cluster may arrive mixed-case (e.g. Echo-HL).
+        parts = endpoint_cluster.lower().rsplit("-", 1)
         if len(parts) == 1:
             return parts[0], ""
         return parts[0], parts[1]

@@ -27,7 +27,14 @@ class ConsulInferenceEndpoint:
 
     @property
     def base_url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        # IPv6 literals must be bracketed in a URL authority, otherwise the
+        # address's own colons get misparsed as the host:port separator.
+        host = (
+            f"[{self.host}]"
+            if ":" in self.host and not self.host.startswith("[")
+            else self.host
+        )
+        return f"http://{host}:{self.port}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,8 +400,10 @@ class ConsulDiscoveryService:
         """Block until a newer refresh round is observed for the given PSM."""
         with self._refresh_condition:
             refreshed = self._refresh_condition.wait_for(
-                lambda: self._refresh_round_by_psm.get(psm, 0) > refresh_round
-                or self._stop_event.is_set(),
+                lambda: (
+                    self._refresh_round_by_psm.get(psm, 0) > refresh_round
+                    or self._stop_event.is_set()
+                ),
                 timeout=timeout_seconds,
             )
             if self._stop_event.is_set():

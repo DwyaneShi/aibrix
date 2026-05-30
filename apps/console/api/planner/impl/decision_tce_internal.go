@@ -20,7 +20,6 @@ limitations under the License.
 package impl
 
 import (
-	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -126,12 +125,12 @@ func isTCEDemoMode() bool {
 func applyTCEDemoOverrides(details *plannerclient.ResourceDetails, resource *plannerclient.ResourceItem) {
 	details.SaleMode = "reserved"
 	details.QoS = "shared_cores"
-	details.EndpointCluster = "Bernard-Prod-GL"
-	details.LogicalCluster = "default"
-	details.ResourcePoolName = "compute-3530-gl-bernard.prod-default-default"
+	details.EndpointCluster = "Echo-HL"
+	details.LogicalCluster = "ai"
+	details.ResourcePoolName = "compute-3530-hl-echo-ai-default"
 
 	resource.Name = defaultRoleName
-	resource.AcceleratorType = "NVIDIA-L20"
+	resource.AcceleratorType = "NVIDIA-H20"
 	resource.AcceleratorCategory = "gpu"
 	resource.AcceleratorCount = 1
 	resource.Replica = 1
@@ -142,7 +141,7 @@ func applyTCEDemoOverrides(details *plannerclient.ResourceDetails, resource *pla
 func newFakeTCEProvisionResult(jobID string) *rmtypes.ProvisionResult {
 	now := time.Now()
 	return &rmtypes.ProvisionResult{
-		ProvisionID:    fmt.Sprintf("demo-%s-%d", jobID, now.UnixNano()),
+		ProvisionID:    strings.TrimPrefix(jobID, "job_"),
 		IdempotencyKey: jobID,
 		Status:         rmtypes.ProvisionStatusRunning,
 		CreatedAt:      now,

@@ -55,7 +55,7 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 		return rmtypes.ResourceProvisionSpec{}, "", 0, err
 	}
 
-	startTime := time.Now().UTC().Add(2 * time.Minute)
+	startTime := time.Now().UTC().Add(5 * time.Minute)
 	endTime := startTime.Truncate(time.Hour).Add(time.Hour)
 	spec := rmtypes.ResourceProvisionSpec{
 		Credential: rmtypes.ResourceCredential{

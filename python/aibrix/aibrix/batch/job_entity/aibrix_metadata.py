@@ -4,9 +4,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 
-from aibrix.logger import init_logger
-
 from aibrix.batch.job_entity.base import _Lenient, _Strict
+from aibrix.logger import init_logger
 
 #: Absolute upper bound for the per-job smart-client in-flight cap. Protects
 #: the gateway / inference endpoints from a single job requesting runaway
@@ -48,6 +47,7 @@ class RuntimeSpec(_Lenient):
 
     target: str
     options: Dict[str, Any] = Field(default_factory=dict)
+
 
 logger = init_logger(__name__)
 

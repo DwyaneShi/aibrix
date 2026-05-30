@@ -349,7 +349,8 @@ func (p *tceProvisioner) buildMatchingIntentRequest(ctx context.Context, req *ty
 	}
 
 	decisionDeadline := req.Spec.TimeWindow.StartTime.UnixMilli()
-	klog.Infof("using decisionDeadline for provision %s: %v", provisionID, decisionDeadline)
+	klog.Infof("using decisionDeadline for provision %s: %d (%s)", provisionID,
+		decisionDeadline, time.UnixMilli(decisionDeadline).Format(time.RFC3339))
 
 	intent := &scheduled_plan_types.MatchingIntent{
 		Groups: groups,
