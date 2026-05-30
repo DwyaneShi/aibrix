@@ -130,7 +130,9 @@ func (p *tceProvisioner) Provision(ctx context.Context, req *types.ResourceProvi
 	result := &types.ProvisionResult{
 		ProvisionID:    provisionID,
 		IdempotencyKey: req.IdempotencyKey,
+		Provider:       string(p.Type()),
 		Status:         types.ProvisionStatusProvisioning,
+		Region:         types.RegionUnknown, // will be updated when provision is running
 		CreatedAt:      now,
 		UpdatedAt:      now,
 		ExtensionProvisionResultDetails: types.ExtensionProvisionResultDetails{
@@ -232,7 +234,16 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 				result.Status = types.ProvisionStatusRunning
 				result.TCE.GroupResults = toTCEGroupResults(matchingResult.GroupResults)
 
-				klog.Infof("provision %s with matchId %s is running: %s", result.ProvisionID, result.TCE.MatchId, matchingResult.Status)
+				// Update region from groupResults
+				// Assume all allocation segments have the same region
+				if result.TCE.GroupResults != nil && len(*result.TCE.GroupResults) > 0 {
+					segments := (*result.TCE.GroupResults)[0].AllocationSegments
+					if len(segments) > 0 {
+						result.Region = segments[0].Region.String()
+					}
+				}
+
+				klog.Infof("provision %s region %s, with matchId %s is running: %s", result.ProvisionID, result.Region, result.TCE.MatchId, matchingResult.Status)
 				groupResuslts, err := json.Marshal(result.TCE.GroupResults)
 				if err != nil {
 					klog.Errorf("failed to marshal groupResults to json: %v", err)
@@ -249,7 +260,7 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 					continue
 				}
 				result.Status = types.ProvisionStatusReleased
-				klog.Infof("provision %s with matchId %s is released: %v", result.ProvisionID, result.TCE.MatchId, result.TCE.GroupResults)
+				klog.Infof("provision %s region %s, with matchId %s is released: %v", result.ProvisionID, result.Region, result.TCE.MatchId, result.TCE.GroupResults)
 				klog.Infof("detailed matching log %s/%s", p.clientset.RegionConfig.ScheduledMatchFE, result.TCE.MatchId)
 			} else if matchingResult.Status == scheduled_plan_types.MatchingResultStatusFailed {
 				if err := p.store.UpdateProvisionStatus(ctx, result.ProvisionID, types.ProvisionStatusFailed); err != nil {
@@ -262,7 +273,7 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 				} else {
 					failedReason = "unknown"
 				}
-				klog.Warningf("provision %s with matchId %s is failed: %s", result.ProvisionID, result.TCE.MatchId, failedReason)
+				klog.Warningf("provision %s region %s, with matchId %s is failed: %s", result.ProvisionID, result.Region, result.TCE.MatchId, failedReason)
 				klog.Warningf("detailed matching log %s/%s", p.clientset.RegionConfig.ScheduledMatchFE, result.TCE.MatchId)
 			}
 		} else if result.Status == types.ProvisionStatusReleasing {
@@ -272,7 +283,7 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 				klog.Warningf("cancel scheduled match failed for provision %s, matchId %s: %v", result.ProvisionID, result.TCE.MatchId, err)
 			}
 			result.Status = types.ProvisionStatusReleased
-			klog.Infof("provision %s with matchId %s is released: %v", result.ProvisionID, result.TCE.MatchId, result.TCE.GroupResults)
+			klog.Infof("provision %s region %s, with matchId %s is released: %v", result.ProvisionID, result.Region, result.TCE.MatchId, result.TCE.GroupResults)
 			klog.Infof("detailed matching log %s/%s", p.clientset.RegionConfig.ScheduledMatchFE, result.TCE.MatchId)
 		}
 	}
