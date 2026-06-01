@@ -17,5 +17,6 @@ limitations under the License.
 package types
 
 const (
-	ResourceProvisionTypeTCE ResourceProvisionType = "tce"
+	ResourceProvisionTypeTCE     ResourceProvisionType = "tce"
+	ResourceProvisionTypeTCEMock ResourceProvisionType = "tceMock"
 )

@@ -28,4 +28,5 @@ package resource_manager
 
 import (
 	_ "github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce"
+	_ "github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tcemock"
 )

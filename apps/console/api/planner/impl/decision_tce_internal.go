@@ -20,9 +20,7 @@ limitations under the License.
 package impl
 
 import (
-	"os"
 	"strings"
-	"time"
 
 	plannerclient "github.com/vllm-project/aibrix/apps/console/api/planner/client"
 	rmtypes "github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
@@ -65,19 +63,13 @@ func buildTCEDecision(
 		details.Resources = []plannerclient.ResourceItem{resource}
 	}
 
-	dec.ResourceDetails = details
+	dec.ResourceDetails = []plannerclient.ResourceDetails{*details}
 	return dec
 }
 
 func populateTCEDetails(details *plannerclient.ResourceDetails, resource *plannerclient.ResourceItem, prov *rmtypes.ProvisionResult) {
 	details.SaleMode = "scheduled"
-	details.QoS = "shared_cores"
-
-	// Demo mode: use hardcoded fields instead of deriving from prov.
-	if isTCEDemoMode() {
-		applyTCEDemoOverrides(details, resource)
-		return
-	}
+	details.QoSLevel = "shared_cores"
 
 	if prov.TCE == nil || prov.TCE.GroupResults == nil {
 		return
@@ -94,7 +86,7 @@ func populateTCEDetails(details *plannerclient.ResourceDetails, resource *planne
 	}
 	details.LogicalCluster = seg.Region.LogicalCluster
 	if seg.CommitInfo != nil && seg.CommitInfo.ResourcePoolName != nil {
-		details.ResourcePoolName = *seg.CommitInfo.ResourcePoolName
+		details.ResourcePoolName = trimResourcePoolSuffix(*seg.CommitInfo.ResourcePoolName)
 	}
 
 	if seg.AcceleratorType != "" {
@@ -111,43 +103,14 @@ func populateTCEDetails(details *plannerclient.ResourceDetails, resource *planne
 	}
 }
 
-// isTCEDemoMode checks the AIBRIX_TCE_DEMO_MODE env toggle.
-func isTCEDemoMode() bool {
-	switch os.Getenv("AIBRIX_TCE_DEMO_MODE") {
-	case "1", "true", "TRUE", "True", "yes", "YES", "Yes":
-		return true
+// trimResourcePoolSuffix drops the trailing priority class segment
+// (e.g. "-guarantee") that the scheduling system appends to the pool
+// name. The MDS queue-name expects the pool identifier without it,
+// e.g. "compute-3530-hl-federationgpu-default-default-guarantee" ->
+// "compute-3530-hl-federationgpu-default-default".
+func trimResourcePoolSuffix(name string) string {
+	if idx := strings.LastIndex(name, "-"); idx > 0 {
+		return name[:idx]
 	}
-	return false
-}
-
-// applyTCEDemoOverrides fills the MDS submission fields with hardcoded demo
-// values. Edit them in place to point the demo at a different cluster/pool.
-func applyTCEDemoOverrides(details *plannerclient.ResourceDetails, resource *plannerclient.ResourceItem) {
-	details.SaleMode = "reserved"
-	details.QoS = "shared_cores"
-	details.EndpointCluster = "Echo-HL"
-	details.LogicalCluster = "ai"
-	details.ResourcePoolName = "compute-3530-hl-echo-ai-default"
-
-	resource.Name = defaultRoleName
-	resource.AcceleratorType = "NVIDIA-H20"
-	resource.AcceleratorCategory = "gpu"
-	resource.AcceleratorCount = 1
-	resource.Replica = 1
-}
-
-// newFakeTCEProvisionResult fabricates a "running" ProvisionResult for demo
-// mode so the worker can skip RM provisioning and proceed to CreateBatch.
-func newFakeTCEProvisionResult(jobID string) *rmtypes.ProvisionResult {
-	now := time.Now()
-	return &rmtypes.ProvisionResult{
-		ProvisionID:    strings.TrimPrefix(jobID, "job_"),
-		IdempotencyKey: jobID,
-		Status:         rmtypes.ProvisionStatusRunning,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-		ExtensionProvisionResultDetails: rmtypes.ExtensionProvisionResultDetails{
-			TCE: &rmtypes.TCEProvisionDetail{},
-		},
-	}
+	return name
 }

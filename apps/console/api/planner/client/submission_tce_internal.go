@@ -25,9 +25,9 @@ package client
 // cluster-scoped allocation detail TCE returns; backends that report only
 // a provision id use DefaultDecision instead.
 type TCEDecision struct {
-	ProvisionID               string           `json:"provision_id,omitempty"`
-	ProvisionResourceDeadline int64            `json:"provision_resource_deadline,omitempty"`
-	ResourceDetails           *ResourceDetails `json:"resource_details,omitempty"`
+	ProvisionID               string            `json:"provision_id,omitempty"`
+	ProvisionResourceDeadline int64             `json:"provision_resource_deadline,omitempty"`
+	ResourceDetails           []ResourceDetails `json:"resource_details,omitempty"`
 }
 
 func (*TCEDecision) isPlannerDecision() {}
@@ -38,7 +38,7 @@ type ResourceDetails struct {
 	EndpointCluster  string `json:"endpoint_cluster,omitempty"`
 	ResourcePoolName string `json:"resource_pool_name,omitempty"`
 	SaleMode         string `json:"salemode,omitempty"`
-	QoS              string `json:"qos,omitempty"`
+	QoSLevel         string `json:"qos_level,omitempty"`
 	LogicalCluster   string `json:"logical_cluster,omitempty"`
 
 	Resources []ResourceItem `json:"resources,omitempty"`

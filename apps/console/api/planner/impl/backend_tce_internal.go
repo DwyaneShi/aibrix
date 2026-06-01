@@ -49,15 +49,15 @@ func (b *tcePlannerBackend) ValidateRequest(req *plannerapi.EnqueueRequest) erro
 	return nil
 }
 
-func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueRequest) (rmtypes.ResourceProvisionSpec, string, int, error) {
-	gpuType, gpusPerReplica, err := decodeAcceleratorFromTemplate(req.ModelTemplate)
+func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueRequest) (spec rmtypes.ResourceProvisionSpec, gpuType string, gpusPerReplica int, err error) {
+	gpuType, gpusPerReplica, err = decodeAcceleratorFromTemplate(req.ModelTemplate)
 	if err != nil {
-		return rmtypes.ResourceProvisionSpec{}, "", 0, err
+		return
 	}
 
 	startTime := time.Now().UTC().Add(5 * time.Minute)
 	endTime := startTime.Truncate(time.Hour).Add(time.Hour)
-	spec := rmtypes.ResourceProvisionSpec{
+	spec = rmtypes.ResourceProvisionSpec{
 		Credential: rmtypes.ResourceCredential{
 			Provider: rmtypes.ResourceProvisionTypeTCE,
 			ExtensionResourceCredentials: rmtypes.ExtensionResourceCredentials{
@@ -70,7 +70,7 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 			EndTime:   &endTime,
 		},
 	}
-	return spec, gpuType, gpusPerReplica, nil
+	return
 }
 
 func (b *tcePlannerBackend) LogProvisionResponse(jobID string, prov *rmtypes.ProvisionResult, spec rmtypes.ResourceProvisionSpec) {
