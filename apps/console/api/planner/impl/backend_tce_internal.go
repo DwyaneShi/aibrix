@@ -82,7 +82,7 @@ func (b *tcePlannerBackend) LogProvisionResponse(jobID string, prov *rmtypes.Pro
 }
 
 // logProvisionReady logs the TCE-specific detail of a ready provision.
-// Folded out of plannerBackend; invoked by BuildDecision.
+// Folded out of plannerBackend; invoked by BuildResourceAllocation.
 func (b *tcePlannerBackend) logProvisionReady(prov *rmtypes.ProvisionResult) {
 	if prov == nil || prov.TCE == nil {
 		return
@@ -99,11 +99,11 @@ func (b *tcePlannerBackend) logProvisionReady(prov *rmtypes.ProvisionResult) {
 		prov.ProvisionID, prov.Status, prov.TCE.MatchId, prov.TCE.MatchOrderUrl, groupResults)
 }
 
-func (b *tcePlannerBackend) BuildDecision(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult, gpuType string, gpusPerReplica int) plannerclient.PlannerDecision {
+func (b *tcePlannerBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult, gpuType string, gpusPerReplica int) plannerclient.ResourceAllocation {
 	b.logProvisionReady(prov)
-	dec := buildTCEDecision(prov, gpuType, gpusPerReplica)
+	allocation := buildTCEResourceAllocation(prov, gpuType, gpusPerReplica)
 	if spec.TimeWindow != nil && spec.TimeWindow.EndTime != nil {
-		dec.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
+		allocation.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
 	}
-	return dec
+	return allocation
 }

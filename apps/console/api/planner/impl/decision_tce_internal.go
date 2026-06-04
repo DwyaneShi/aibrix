@@ -14,8 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Builds the TCEDecision projection for the TCE backend. Missing fields are
-// tolerated and simply omitted.
+// Builds the ResourceAllocation projection for the TCE backend. Missing fields
+// are tolerated and simply omitted.
 
 package impl
 
@@ -29,16 +29,16 @@ import (
 // defaultRoleName matches the StormService default role.
 const defaultRoleName = "default"
 
-// buildTCEDecision projects a TCE ProvisionResult into the TCEDecision
-// payload that rides on extra_body.aibrix.planner_decision. Provider-specific
-// details are mapped best-effort; missing fields are omitted. Replicas
-// defaults to 1 (single-replica only today).
-func buildTCEDecision(
+// buildTCEResourceAllocation projects a TCE ProvisionResult into the
+// extra_body.aibrix.resource_allocation payload. Provider-specific details are
+// mapped best-effort; missing fields are omitted. Replicas defaults to 1
+// (single-replica only today).
+func buildTCEResourceAllocation(
 	prov *rmtypes.ProvisionResult,
 	gpuType string,
 	gpusPerReplica int,
-) *plannerclient.TCEDecision {
-	dec := &plannerclient.TCEDecision{
+) *plannerclient.TCEResourceAllocation {
+	allocation := &plannerclient.TCEResourceAllocation{
 		ProvisionID: prov.ProvisionID,
 	}
 
@@ -63,8 +63,8 @@ func buildTCEDecision(
 		details.Resources = []plannerclient.ResourceItem{resource}
 	}
 
-	dec.ResourceDetails = []plannerclient.ResourceDetails{*details}
-	return dec
+	allocation.ResourceDetails = []plannerclient.ResourceDetails{*details}
+	return allocation
 }
 
 func populateTCEDetails(details *plannerclient.ResourceDetails, resource *plannerclient.ResourceItem, prov *rmtypes.ProvisionResult) {

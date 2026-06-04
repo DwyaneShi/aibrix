@@ -46,7 +46,7 @@ func init() {
 
 // tceMockBackend embeds tcePlannerBackend so it inherits ValidateRequest
 // and the LogProvisionResponse capability unchanged. It overrides Schedule
-// to stamp the mock provider on the spec, and BuildDecision to substitute
+// to stamp the mock provider on the spec, and BuildResourceAllocation to substitute
 // hardcoded demo cluster/pool values in place of fields that would
 // normally be derived from a real RM ProvisionResult.
 type tceMockBackend struct {
@@ -65,26 +65,26 @@ func (b *tceMockBackend) Schedule(ctx context.Context, req *plannerapi.EnqueueRe
 	return
 }
 
-func (b *tceMockBackend) BuildDecision(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult, gpuType string, gpusPerReplica int) plannerclient.PlannerDecision {
-	dec := buildTCEDecision(prov, gpuType, gpusPerReplica)
-	if len(dec.ResourceDetails) > 0 && len(dec.ResourceDetails[0].Resources) > 0 {
-		applyTCEDemoOverrides(&dec.ResourceDetails[0], &dec.ResourceDetails[0].Resources[0])
+func (b *tceMockBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult, gpuType string, gpusPerReplica int) plannerclient.ResourceAllocation {
+	allocation := buildTCEResourceAllocation(prov, gpuType, gpusPerReplica)
+	if len(allocation.ResourceDetails) > 0 && len(allocation.ResourceDetails[0].Resources) > 0 {
+		applyTCEDemoOverrides(&allocation.ResourceDetails[0], &allocation.ResourceDetails[0].Resources[0])
 	} else {
-		// Resources may have been omitted when buildTCEDecision saw no
+		// Resources may have been omitted when buildTCEResourceAllocation saw no
 		// accelerator request; demo mode always wants a populated entry.
-		if len(dec.ResourceDetails) == 0 {
-			dec.ResourceDetails = []plannerclient.ResourceDetails{{
+		if len(allocation.ResourceDetails) == 0 {
+			allocation.ResourceDetails = []plannerclient.ResourceDetails{{
 				Provider: string(rmtypes.ResourceProvisionTypeTCE),
 			}}
 		}
 		resource := plannerclient.ResourceItem{Name: defaultRoleName}
-		applyTCEDemoOverrides(&dec.ResourceDetails[0], &resource)
-		dec.ResourceDetails[0].Resources = []plannerclient.ResourceItem{resource}
+		applyTCEDemoOverrides(&allocation.ResourceDetails[0], &resource)
+		allocation.ResourceDetails[0].Resources = []plannerclient.ResourceItem{resource}
 	}
 	if spec.TimeWindow != nil && spec.TimeWindow.EndTime != nil {
-		dec.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
+		allocation.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
 	}
-	return dec
+	return allocation
 }
 
 // applyTCEDemoOverrides fills the MDS submission fields with hardcoded demo

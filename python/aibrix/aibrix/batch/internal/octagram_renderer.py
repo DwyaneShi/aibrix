@@ -11,8 +11,8 @@ from aibrix.batch.template import ModelDeploymentTemplate
 from aibrix.downloader.utils import infer_model_name
 from aibrix.logger import init_logger
 
-from .engine_adapter import build_engine_args
-from .renderer import _RendererSupport
+from aibrix.batch.manifest.engine_adapter import build_engine_args
+from aibrix.batch.manifest.renderer import _RendererSupport
 
 logger = init_logger(__name__)
 
@@ -583,11 +583,11 @@ class OctagramManifestRenderer(_RendererSupport):
         now: datetime,
     ) -> Optional[datetime]:
         candidates = [now + timedelta(seconds=spec.completion_window)]
-        planner_decision = spec.aibrix.resource_allocation if spec.aibrix else None
-        if planner_decision is None and spec.aibrix is not None:
-            planner_decision = getattr(spec.aibrix, "planner_decision", None)
+        resource_allocation = spec.aibrix.resource_allocation if spec.aibrix else None
         provision_deadline = (
-            planner_decision.provision_resource_deadline if planner_decision else None
+            resource_allocation.provision_resource_deadline
+            if resource_allocation
+            else None
         )
         if provision_deadline is not None and provision_deadline > 0:
             candidates.append(

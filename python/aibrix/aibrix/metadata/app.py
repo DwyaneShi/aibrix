@@ -280,7 +280,7 @@ def build_app(args: argparse.Namespace, params={}):
 
     app.state.httpx_client_wrapper = HTTPXClientWrapper()
     try:
-        from aibrix.metadata.core import ConsulDiscoveryService
+        from aibrix.batch.internal.consul_discovery import ConsulDiscoveryService
 
         app.state.model_discovery = ConsulDiscoveryService()
     except ImportError:

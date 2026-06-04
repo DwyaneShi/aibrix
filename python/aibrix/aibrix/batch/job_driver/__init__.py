@@ -37,7 +37,6 @@ from aibrix.batch.job_driver.runtime import (
 from aibrix.batch.job_driver.runtime.k8s_deployment import DeploymentRuntime
 from aibrix.batch.job_driver.runtime.k8s_job import K8sJobRuntime
 from aibrix.batch.job_driver.runtime.lambda_cloud import LambdaCloudRuntime
-from aibrix.batch.job_driver.runtime.octagram import OctagramRuntime
 from aibrix.batch.job_driver.runtime.runpod import RunPodRuntime
 
 __all__ = [
@@ -50,7 +49,6 @@ __all__ = [
     "DeploymentRuntime",
     "K8sJobRuntime",
     "LambdaCloudRuntime",
-    "OctagramRuntime",
     "RunPodRuntime",
     "Runtime",
     "RuntimeBase",

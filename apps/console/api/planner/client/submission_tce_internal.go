@@ -14,23 +14,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// TCEDecision is the TCE backend's PlannerDecision implementation. It must
-// live in package client because PlannerDecision is sealed by the unexported
-// isPlannerDecision marker; only types declared here can satisfy it.
+// TCEResourceAllocation is the TCE backend's ResourceAllocation implementation.
+// It must live in package client because ResourceAllocation is sealed by the
+// unexported isResourceAllocation marker; only types declared here can satisfy it.
 
 package client
 
-// TCEDecision is the TCE backend's allocation decision carried on
-// AIBrixExtraBody.PlannerDecision. It extends the provision id with the
-// cluster-scoped allocation detail TCE returns; backends that report only
-// a provision id use DefaultDecision instead.
-type TCEDecision struct {
+// TCEResourceAllocation is carried on AIBrixExtraBody.ResourceAllocation. It
+// extends the provision id with the cluster-scoped allocation detail TCE returns.
+type TCEResourceAllocation struct {
 	ProvisionID               string            `json:"provision_id,omitempty"`
 	ProvisionResourceDeadline int64             `json:"provision_resource_deadline,omitempty"`
 	ResourceDetails           []ResourceDetails `json:"resource_details,omitempty"`
 }
 
-func (*TCEDecision) isPlannerDecision() {}
+func (*TCEResourceAllocation) isResourceAllocation() {}
 
 // ResourceDetails describes a cluster-scoped allocation.
 type ResourceDetails struct {

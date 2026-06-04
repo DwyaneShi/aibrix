@@ -27,7 +27,7 @@ from aibrix.batch.client import EndpointSource
 from aibrix.batch.client.sources import DiscoveryEndpointSource, GatewayEndpointSource
 from aibrix.batch.job_driver.runtime import Endpoint, RuntimeBase, register_runtime
 from aibrix.batch.job_entity import BatchJob, BatchJobError, BatchJobErrorCode
-from aibrix.batch.manifest import OctagramManifestRenderer
+from aibrix.batch.internal.octagram_renderer import OctagramManifestRenderer
 from aibrix.batch.state import JobEntityManager
 from aibrix.context import InfrastructureContext
 from aibrix.logger import init_logger
@@ -115,8 +115,6 @@ class OctagramRuntime(RuntimeBase):
             raise ValueError("OctagramRuntime requires spec.aibrix")
 
         resource_allocation = job.spec.aibrix.resource_allocation
-        if resource_allocation is None:
-            resource_allocation = getattr(job.spec.aibrix, "planner_decision", None)
         resource_details = (
             resource_allocation.resource_details if resource_allocation else None
         )
@@ -131,7 +129,7 @@ class OctagramRuntime(RuntimeBase):
         namespace = workload["metadata"].get("namespace", _DEFAULT_NAMESPACE)
         workload_name = workload["metadata"]["name"]
         model_name = workload["metadata"]["labels"]["model.aibrix.ai/name"]
-        psm = self._resolve_service_id(workload)
+        psm = self._resolve_psm(workload)
         replicas = int(workload["spec"]["deployStrategy"].get("replicas", 1))
 
         if self._renderer.template is not None:
@@ -161,7 +159,7 @@ class OctagramRuntime(RuntimeBase):
             namespace=namespace,
             workload=workload_name,
             model_name=model_name,
-            service_id=psm,
+            psm=psm,
             replicas=replicas,
         )  # type: ignore[call-arg]
         return handle
@@ -238,8 +236,9 @@ class OctagramRuntime(RuntimeBase):
             return str(job.spec.opts[constant.BATCH_OPTS_RESOURCE_ENDPOINT])
         return None
 
-    def _resolve_service_id(self, workload: dict[str, Any]) -> Optional[str]:
-        psm = workload["metadata"]["labels"].get("psm")
+    def _resolve_psm(self, workload: dict[str, Any]) -> Optional[str]:
+        labels = workload["metadata"].get("labels", {})
+        psm = labels.get("psm")
         if not psm:
             return None
         idc_name = getattr(self._renderer, "idc_name", "")
