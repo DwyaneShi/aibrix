@@ -85,8 +85,7 @@ case "${DRY_RUN:-0}" in
     log "DRY_RUN=${DRY_RUN} -> appending --dry-run"
     ;;
   *)
-    EXTRA_ARGS+=(--enable-redis-job)
-    log "DRY_RUN not set -> appending --enable-redis-job by default"
+    log "DRY_RUN not set"
     ;;
 esac
 
