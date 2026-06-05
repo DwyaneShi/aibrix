@@ -8,6 +8,10 @@
 # in the provisioning step). That sidesteps every cross-platform / sdist /
 # glibc / wheel-availability headache that comes with shipping a wheelhouse.
 #
+# Usage:
+#   ./build.sh              # Build without internal dependencies
+#   ./build.sh --with-internal  # Build with internal dependencies
+#
 # Output layout:
 #   output/metadata/
 #   ├── aibrix-<ver>-py3-none-any.whl   # the app wheel
@@ -16,6 +20,22 @@
 #   └── run.sh                          # startup script (pip install + exec)
 
 set -euo pipefail
+
+# Parse arguments
+WITH_INTERNAL=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --with-internal)
+      WITH_INTERNAL=true
+      shift
+      ;;
+    *)
+      echo "ERROR: Unknown argument: $1" >&2
+      echo "Usage: $0 [--with-internal]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -47,7 +67,15 @@ mkdir -p "${OUT_DIR}"
 
 echo "==> Building aibrix wheel (excluding profiling/dev groups)"
 pushd "${SCRIPT_DIR}" >/dev/null
-poetry install --without profiling --without dev --no-interaction --no-root
+
+# Construct poetry install command based on --with-internal flag
+POETRY_INSTALL_ARGS="--without profiling --without dev --no-interaction --no-root"
+if [[ "${WITH_INTERNAL}" == "true" ]]; then
+  POETRY_INSTALL_ARGS="--with internal ${POETRY_INSTALL_ARGS}"
+  echo "    (including internal dependencies)"
+fi
+
+poetry install ${POETRY_INSTALL_ARGS}
 poetry build -f wheel
 popd >/dev/null
 
@@ -61,11 +89,14 @@ cp "${WHEEL}" "${OUT_DIR}/"
 
 echo "==> Exporting requirements.txt (matching wheel's install_requires)"
 pushd "${SCRIPT_DIR}" >/dev/null
-poetry export \
-  --without profiling --without dev \
-  --without-hashes \
-  -f requirements.txt \
-  -o "${OUT_DIR}/requirements.txt"
+
+# Construct poetry export command based on --with-internal flag
+POETRY_EXPORT_ARGS="--without profiling --without dev --without-hashes -f requirements.txt -o ${OUT_DIR}/requirements.txt"
+if [[ "${WITH_INTERNAL}" == "true" ]]; then
+  POETRY_EXPORT_ARGS="--with internal ${POETRY_EXPORT_ARGS}"
+fi
+
+poetry export ${POETRY_EXPORT_ARGS}
 popd >/dev/null
 
 echo "==> Copying build.sh + run.sh -> ${OUT_DIR}"
