@@ -107,3 +107,12 @@ func (b *tcePlannerBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisi
 	}
 	return allocation
 }
+
+func (b *tcePlannerBackend) BuildRuntime(req *plannerapi.EnqueueRequest, prov *rmtypes.ProvisionResult) (*plannerapi.RuntimeRef, error) {
+	if req == nil {
+		return nil, fmt.Errorf("missing enqueue request")
+	}
+	return &plannerapi.RuntimeRef{
+		Target: "Octagram",
+	}, nil
+}

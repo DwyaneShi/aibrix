@@ -31,6 +31,7 @@ package impl
 
 import (
 	"context"
+	"fmt"
 
 	plannerapi "github.com/vllm-project/aibrix/apps/console/api/planner/api"
 	plannerclient "github.com/vllm-project/aibrix/apps/console/api/planner/client"
@@ -85,6 +86,15 @@ func (b *tceMockBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionS
 		allocation.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
 	}
 	return allocation
+}
+
+func (b *tceMockBackend) BuildRuntime(req *plannerapi.EnqueueRequest, prov *rmtypes.ProvisionResult) (*plannerapi.RuntimeRef, error) {
+	if req == nil {
+		return nil, fmt.Errorf("missing enqueue request")
+	}
+	return &plannerapi.RuntimeRef{
+		Target: "Octagram",
+	}, nil
 }
 
 // applyTCEDemoOverrides fills the MDS submission fields with hardcoded demo
