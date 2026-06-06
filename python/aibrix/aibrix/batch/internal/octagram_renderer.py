@@ -24,6 +24,20 @@ _DEFAULT_TCE_PRIMARY_PORT = "fake_port"
 _DEFAULT_VOLUME_CAPACITY = "10000Gi"
 _DEFAULT_IDENTITY_TREATMENT_USER = "jingyuan.zhang0929"
 
+# The matching/planner layer uses fully-qualified accelerator SKU names while
+# Octagram nodes are labeled with vendor-stripped names. Translate on dispatch;
+# unmapped values pass through unchanged.
+_OCTAGRAM_ACCELERATOR_TYPE_MAPPING = {
+    "NVIDIA-A100-SXM4-80GB": "A100-SXM4-80GB",
+}
+
+
+def _map_accelerator_type(accelerator_type: Optional[str]) -> str:
+    if not accelerator_type:
+        return ""
+    return _OCTAGRAM_ACCELERATOR_TYPE_MAPPING.get(accelerator_type, accelerator_type)
+
+
 _BASE_FEATURE_GATES = [
     {"name": "ContainerResourceView", "value": "container"},
     {"name": "ContainerShmSize", "value": 100000},
@@ -309,7 +323,9 @@ class OctagramManifestRenderer(_RendererSupport):
     ) -> None:
         annotations = {
             "bytedance.quota.salemode": detail.salemode or "",
-            "deployment.tce.kubernetes.io/gpu-type": resource.accelerator_type or "",
+            "deployment.tce.kubernetes.io/gpu-type": _map_accelerator_type(
+                resource.accelerator_type
+            ),
             "deployment.tce.kubernetes.io/requestGpuUserDemand": str(
                 resource.accelerator_count or 0
             ),
@@ -464,7 +480,7 @@ class OctagramManifestRenderer(_RendererSupport):
                 }
             ],
             "nodeSelector": {
-                "accelerator": resource.accelerator_type or "",
+                "accelerator": _map_accelerator_type(resource.accelerator_type),
                 "nodeLevel": detail.logical_cluster or "",
             },
             "hostNetwork": True,
