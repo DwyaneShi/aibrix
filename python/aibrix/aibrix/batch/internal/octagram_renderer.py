@@ -214,6 +214,15 @@ class OctagramManifestRenderer(_RendererSupport):
         # Construct dynamic values
         job_name = f"batch-{template.name}-{job_id[:8]}".lower()
         resource = prividerSpec.resource
+        # Short-term: until the deployment template carries explicit cpu/memory,
+        # derive pod requests from a fixed per-GPU ratio (16 cores + 96Gi/GPU).
+        # Only fill when absent so future template-provided values win.
+        gpu_count = resource.accelerator_count or 0
+        if gpu_count > 0:
+            if not resource.cpu:
+                resource.cpu = str(gpu_count * 16)
+            if not resource.memory:
+                resource.memory = f"{gpu_count * 96}Gi"
         model_name = infer_model_name(template.spec.model_source.uri).lower()
         served_model_name = f"{job_name}-{model_name}"
         cluster_name, idc_name = self._parse_endpoint_cluster(
