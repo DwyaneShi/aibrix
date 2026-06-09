@@ -39,6 +39,9 @@ type ResourceDetails struct {
 	QoSLevel         string `json:"qos_level,omitempty"`
 	LogicalCluster   string `json:"logical_cluster,omitempty"`
 
+	GpuType string `json:"gpu_type,omitempty"`
+	Replica int    `json:"replica,omitempty"`
+
 	Resources []ResourceItem `json:"resources,omitempty"`
 }
 

@@ -105,6 +105,8 @@ func applyTCEDemoOverrides(details *plannerclient.ResourceDetails, resource *pla
 	details.EndpointCluster = "Echo-HL"
 	details.LogicalCluster = "ai"
 	details.ResourcePoolName = "compute-3530-hl-echo-ai-default"
+	details.GpuType = "NVIDIA-H20"
+	details.Replica = 1
 
 	resource.Name = defaultRoleName
 	resource.AcceleratorType = "NVIDIA-H20"

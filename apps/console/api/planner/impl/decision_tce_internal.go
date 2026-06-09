@@ -101,6 +101,11 @@ func populateTCEDetails(details *plannerclient.ResourceDetails, resource *planne
 	if seg.Replicas != nil && *seg.Replicas > 0 {
 		resource.Replica = *seg.Replicas
 	}
+
+	// Mirror onto the flat fields the console handler/UI read; only set on the
+	// real allocation path so the card stays blank when there's no segment.
+	details.GpuType = resource.AcceleratorType
+	details.Replica = resource.Replica
 }
 
 // trimResourcePoolSuffix drops the trailing priority class segment
