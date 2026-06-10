@@ -1,0 +1,580 @@
+apiVersion: core.tce.byted.org/v1alpha1
+kind: DeploymentWorkload
+metadata:
+  annotations:
+    controller.octagram.io/full-sync-trigger: "2026-05-14T01:38:14.545324296+08:00"
+    tce.kubernetes.io/lastUpdate: "1778694384822396614"
+    ticket.bytepaas.io/step-auto-inc-id: "1447532371"
+  creationTimestamp: "2026-05-06T23:34:34Z"
+  finalizers:
+  - deployment-workload-controller
+  generation: 21
+  labels:
+    name: inf-aibrix-benchmark-217581f2-ai
+    # paas_cluster: Bernard-Prod
+    # psm: inf.aibrix.benchmark
+  name: inf-aibrix-benchmark-217581f2-ai
+  namespace: default
+  resourceVersion: "1775100497607262194"
+  uid: 82d964a8-aade-499c-8e3f-06252287efd9
+spec:
+  deployStrategy:
+    minReadySeconds: 10
+    progressDeadlineSeconds: 2147483647
+    replicas: 1
+    revisionHistoryLimit: 5
+    selector:
+      matchLabels:
+        name: inf-aibrix-benchmark-217581f2-ai
+        # paas_cluster: Bernard-Prod
+        # psm: inf.aibrix.benchmark
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 0%
+      type: RollingUpdate
+  deploymentMeta:
+    annotations:
+      deployment.tce.kubernetes.io/gpu-type: NVIDIA-H20
+      pod.tce.kubernetes.io/netcls: "481417024"
+      queue-name: compute-3530-hl-echo-ai-default
+      tce-planning.byted.org/node: "9212820"
+      vpa.katalyst.kubewharf.io/enable: "true"
+    labels:
+      name: inf-aibrix-benchmark-217581f2-ai
+      # paas_cluster: Bernard-Prod
+      # psm: inf.aibrix.benchmark
+  featureGates:
+  - name: AutoEvictionEnable
+    value: false
+  - name: CloudNativeLabel
+    value:
+      cloudnative-application-platform: mlsys.bernard
+  - name: ContainerPrivileged
+    value: false
+  - name: ContainerResourceView
+    value: container
+  - name: ContainerRuntime
+    value: Disabled
+  - name: ContainerSRIOV
+    value: false
+  - name: ContainerShmSize
+    value: 100000
+  - name: ContainerUlimits
+    value: ""
+  - name: DNSPolicy
+    value: Default
+  - name: DaemonIncludeNotReadyNode
+    value: false
+  - name: HistoryConsulWeight
+    value: false
+  - name: IPv6OnlyCompatible
+    value: true
+  - name: KatalystMemoryEnhancement
+    value:
+      numa_binding: "false"
+  - name: KatalystQosEnhancement
+    value:
+      katalyst.kubewharf.io/memory_enhancement: '{"numa_binding":"false","numa_exclusive":"false"}'
+  - name: KatalystQosLevel
+    value: shared_cores
+  - name: RDMA
+    value: false
+  - name: SolarServiceInplaceUpgrade
+    value: false
+  podBase:
+    annotations:
+      AvailableZoneRebalance: "true"
+      bytedance.com/main-container-name: inf-aibrix-benchmark-217581f2-ai
+      bytedance.quota.salemode: ""
+      pod.tce.kubernetes.io/autoport: "1"
+      pod.tce.kubernetes.io/netcls: "481417024"
+      pod.tce.kubernetes.io/netcls-version: v2
+      queue-name: compute-3530-hl-echo-ai-default
+    containers:
+      - name: llm-engine
+        env:
+          - name: AIBRIX_LLM_ENGINE
+            value: vllm
+          - name: AIBRIX_SERVED_MODEL_NAME
+            value: deepseek-v4-flash
+          # - name: BERNARD_APP_REGION
+          #   value: prod_cn
+          # - name: BERNARD_CONFIG
+          #   value: '{}'
+          # - name: BERNARD_GPU_NAME
+          #   value: h20
+          # - name: BERNARD_ID
+          #   value: inf.aibrix.benchmark
+          # - name: BERNARD_IMAGE_TYPE
+          #   value: custom-bind-icm
+          # - name: BERNARD_MODEL
+          #   value: modelzoo://
+          # - name: BERNARD_MODEL_NAME
+          # - name: BERNARD_MODEL_TYPE
+          #   value: tensorflow
+          # - name: BERNARD_MODEL_VERSION
+          # - name: BERNARD_PLACEMENT
+          #   value: none
+          # - name: BERNARD_REGION
+          #   value: hl-echo-ai
+          # - name: BERNARD_SD_ENV
+          #   value: prod
+          # - name: BERNARD_SD_TAGS
+          #   value: '{\"cluster\": \"default\", \"kind\": \"pod\", \"env\": \"$BERNARD_SD_ENV\",
+          #     \"weight\": \"$BERNARD_SERVICE_WEIGHT\"}'
+          # - name: BERNARD_SERVICE_ID
+          #   value: AIBrix-Test-DeepSeek-V4-Flash
+          # - name: BERNARD_SERVICE_OWNER
+          #   value: dave.li
+          # - name: BERNARD_SERVICE_WEIGHT
+          #   value: "10"
+          # - name: BGCP_AUTO_ATTACH
+          #   value: torch_infer
+          # - name: BGCP_LOGGING_STDOUT
+          #   value: "1"
+          # - name: BYTECOPY_SNIFFER_CLUSTER
+          #   value: default
+          # - name: BYTECOPY_SNIFFER_ENV
+          #   value: prod
+          # - name: BYTEPAAS_CLUSTER_ID
+          #   value: be00a0d00000000031728436
+          # - name: BYTEPAAS_SERVICE_ID
+          #   value: 69fb890b9a7f1e2ccdd73e0c
+          # - name: BYTEPAAS_WORKLOAD_RESOURCE_VERSION
+          #   value: 6a04b7061350837ce1320eac
+          - name: ContainerShmSize
+            value: "100000"
+          - name: ENABLE_CONSUL
+            value: "True"
+          - name: EXTRA_PARAMETERS
+            value: --gpu-memory-utilization 0.85 --enable-expert-parallel --kv-cache-dtype
+              fp8 --max-model-len 16384 --reasoning-parser deepseek_v4 --enforce-eager
+              --no-enable-flashinfer-autotune
+          - name: GLOO_SOCKET_IFNAME
+            value: eth0
+          - name: HDFS_MODEL_PATH
+            value: hdfs://haruna/home/byte_tce_orchestration/aibrix/models/DeepSeek-V4-Flash
+          - name: IS_DOCKER_ENV
+            value: "true"
+          - name: IS_HOST_NETWORK
+            value: "1"
+          - name: IS_READY_CHECK
+            value: "1"
+          - name: K8S_ACCELERATOR
+            value: NVIDIA-H20
+          - name: LOAD_SERVICE_PSM
+            value: inf.aibrix.benchmark
+          - name: MAX_TERMINATION_SECONDS
+            value: "60"
+          - name: MERLIN_COPILOT_SERVICE_PORT_HIDDEN
+            value: "True"
+          - name: MERLIN_COPILOT_SERVICE_PORT_INDEX
+            value: "6"
+          - name: MESH_AGENT_SIDECAR_ENABLE_SEED_MERLIN_COPILOT
+            value: "1"
+          - name: MINIPOD_AFFINITY_LEVEL
+          - name: MINIPOD_PLACEMENT
+          - name: MODEL_NAME
+            value: DeepSeek-V4-Flash
+          - name: MPS_SHARED_VOLUME_MEMORY
+            value: "100"
+          - name: MY_GPU_REQUEST
+            value: "8"
+          - name: NCCL_DEBUG
+            value: WARN
+          - name: NCCL_SOCKET_IFNAME
+            value: eth0
+          - name: NIXL_LOG_LEVEL
+            value: info
+          - name: PYTHONHASHSEED
+            value: "1047"
+          - name: SD_CONVERGENCE_SECONDS
+            value: "30"
+          - name: TCE_CLUSTER
+            value: Echo
+          - name: TCE_CLUSTER_ID
+            value: "31728436"
+          - name: TCE_ENABLE_IPV6
+            value: "true"
+          - name: TCE_ENABLE_SIDECAR
+            value: "100"
+          - name: TCE_ENV
+            value: prod
+          - name: TCE_INSTALL_SIDECAR
+            value: "True"
+          # - name: TCE_INSTANCE_WEIGHT
+          #   value: $BERNARD_SERVICE_WEIGHT
+          - name: TCE_INTERNAL_IDC
+            value: HL
+          - name: TCE_LAZYLOAD_ENABLED
+            value: "1"
+          - name: TCE_PHYSICAL_CLUSTER
+            value: Echo
+          - name: TCE_PRIMARY_PORT
+            value: fake_port
+          - name: TCE_PSM
+            value: inf.aibrix.benchmark
+          - name: TCE_STAGE
+            value: all_dc
+          - name: TP_SIZE
+            value: "8"
+          # - name: UCX_LOG_LEVEL
+          #   value: info
+          # - name: UCX_PROTO_INFO
+          #   value: "y"
+          # - name: USE_BERNARD_STDOUT
+          #   value: "1"
+          # - name: USE_INFEROBUST
+          #   value: "0"
+          # - name: USE_NAS
+          #   value: "true"
+          - name: VLLM_ENABLE_V1_MULTIPROCESSING
+            value: "1"
+          - name: VLLM_LOGGING_LEVEL
+            value: info
+          - name: VLLM_NIXL_ABORT_REQUEST_TIMEOUT
+            value: "600"
+          - name: VLLM_WORKER_MULTIPROC_METHOD
+            value: spawn
+        image: hub.byted.org/aibrix/inf.aibrix.vllm:1.0.0.128_nydus
+        imagePullPolicy: IfNotPresent
+        isMainContainer: true
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - bash
+              - -c
+              - /opt/tiger/tce/tce_tools/bin/pre_stop; /home/tiger/.op/docker_pre_stop.sh;
+        livenessProbe:
+          exec:
+            command:
+            - bash
+            - -c
+            - /opt/tiger/bernard/bernard_tools/bin/liveness_check.sh
+          failureThreshold: 5
+          initialDelaySeconds: 180
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 30
+        ports:
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+        readinessProbe:
+          exec:
+            command:
+            - bash
+            - -c
+            - /opt/tiger/tce/tce_tools/bin/readiness_check.sh
+          failureThreshold: 2
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 30
+        resources:
+          cpu:
+            limit: "64"
+            request: "64"
+          gpu:
+            limit: "8"
+            request: "8"
+          memory:
+            limit: 1Ti
+            request: 1Ti
+        volumeMounts:
+        # - mountPath: /opt/tiger/bernard
+        #   name: bernard
+        #   readOnly: true
+        # - mountPath: /opt/tiger/bernard_pre_download
+        #   name: bernard-pre-download
+        # - mountPath: /opt/tiger/tce/tce_tools
+        #   name: bernard-tce-tools
+        #   readOnly: true
+        # - mountPath: /mnt/bn/aibrix-models
+        #   name: bytefuse-aibrix-models
+        - mountPath: /sys/fs/cgroup
+          name: cgroups
+          readOnly: true
+        - mountPath: /opt/tiger/chadc
+          name: chadc
+          readOnly: true
+        - mountPath: /opt/tiger/consul_deploy
+          name: consul-deploy
+          readOnly: true
+        - mountPath: /opt/tiger/cores
+          name: core
+          readOnly: true
+        - mountPath: /tmp
+          name: databus
+        - mountPath: /opt/tmp
+          name: databus-new
+          readOnly: true
+        - mountPath: /opt/tiger/dist/
+          name: dist
+          readOnly: true
+        - mountPath: /usr/local/tao/agent/modules/bvc/
+          name: host-usr-local-tao-agent-modules-bvc
+          readOnly: true
+        - mountPath: /opt/tiger/jdk
+          name: jdk
+          readOnly: true
+        - mountPath: /opt/tiger/x86_64-linux-gnu
+          name: linux-gnu
+          readOnly: true
+        - mountPath: /proc/cpuinfo
+          name: lxcfs-proc-cpuinfo
+          readOnly: true
+        - mountPath: /proc/diskstats
+          name: lxcfs-proc-diskstats
+          readOnly: true
+        - mountPath: /proc/meminfo
+          name: lxcfs-proc-meminfo
+          readOnly: true
+        - mountPath: /proc/stat
+          name: lxcfs-proc-stat
+          readOnly: true
+        - mountPath: /proc/swaps
+          name: lxcfs-proc-swaps
+          readOnly: true
+        - mountPath: /proc/uptime
+          name: lxcfs-proc-uptime
+          readOnly: true
+        - mountPath: /root/tce/lxcfs/run
+          name: lxcfs-runpath
+          readOnly: true
+        - mountPath: /opt/tiger/tce/network
+          name: network
+          readOnly: true
+        - mountPath: /opt/tiger/data/log
+          name: opt-tiger-data-log
+          subPathExpr: $(MY_POD_NAME)/data/log
+        - mountPath: /opt/tiger/toutiao/log
+          name: opt-tiger-toutiao-log
+          subPathExpr: $(MY_POD_NAME)/toutiao/log
+        - mountPath: /opt/tiger/pyutil
+          name: pyutil
+          readOnly: true
+        - mountPath: /run
+          name: run
+        - mountPath: /run/lock
+          name: run-lock
+          readOnly: true
+        - mountPath: /opt/tiger/ss_bin
+          name: ss-bin
+          readOnly: true
+        - mountPath: /sys
+          name: sys
+          readOnly: true
+        - mountPath: /etc/resolv.conf
+          name: sys-resolv-conf
+          readOnly: true
+        - mountPath: /opt/tiger/tce/tce_tools/bin/binary
+          name: tce-tools-binary
+          readOnly: true
+        - mountPath: /var/log/tiger
+          name: var-log-tiger
+          subPathExpr: $(MY_POD_NAME)/var/log/tiger
+        - mountPath: /opt/tiger/yarn_deploy
+          name: yarn-deploy
+          readOnly: true
+    hostNetwork: true
+    hostUniq: {}
+    nodeSelector:
+      accelerator: NVIDIA-H20
+      bytefuse: enable
+      nodeLevel: ai
+    priorityClassName: guaranteed-medium-preemptable
+    terminationGracePeriodSeconds: 30
+    volumes:
+      # - hostPath:
+      #     path: /opt/tiger/bernard
+      #     type: ""
+      #   name: bernard
+      # - hostPath:
+      #     path: /opt/tiger/bernard_pre_download
+      #     type: ""
+      #   name: bernard-pre-download
+      # - hostPath:
+      #     path: /opt/tiger/bernard/bernard_tools
+      #     type: ""
+      #   name: bernard-tce-tools
+      # - name: bytefuse-aibrix-models
+      #   persistentVolumeClaim:
+      #     claimName: bytefuse-aibrix-models
+      - hostPath:
+          path: /sys/fs/cgroup
+          type: ""
+        name: cgroups
+      - hostPath:
+          path: /opt/tiger/chadc
+          type: ""
+        name: chadc
+      - hostPath:
+          path: /opt/tiger/consul_deploy
+          type: ""
+        name: consul-deploy
+      - hostPath:
+          path: /opt/tiger/cores
+          type: DirectoryOrCreate
+        name: core
+      - hostPath:
+          path: /tmp
+          type: ""
+        name: databus
+      - hostPath:
+          path: /opt/tmp
+          type: ""
+        name: databus-new
+      - hostPath:
+          path: /opt/tiger/dist/
+          type: ""
+        name: dist
+      - hostPath:
+          path: /usr/local/tao/agent/modules/bvc/
+          type: ""
+        name: host-usr-local-tao-agent-modules-bvc
+      - hostPath:
+          path: /opt/tiger/jdk
+          type: ""
+        name: jdk
+      - hostPath:
+          path: /usr/lib/x86_64-linux-gnu
+          type: ""
+        name: linux-gnu
+      - hostPath:
+          path: /proc/cpuinfo
+          type: ""
+        name: lxcfs-proc-cpuinfo
+      - hostPath:
+          path: /proc/diskstats
+          type: ""
+        name: lxcfs-proc-diskstats
+      - hostPath:
+          path: /proc/meminfo
+          type: ""
+        name: lxcfs-proc-meminfo
+      - hostPath:
+          path: /proc/stat
+          type: ""
+        name: lxcfs-proc-stat
+      - hostPath:
+          path: /proc/swaps
+          type: ""
+        name: lxcfs-proc-swaps
+      - hostPath:
+          path: /proc/uptime
+          type: ""
+        name: lxcfs-proc-uptime
+      - hostPath:
+          path: /root/tce/lxcfs/run
+          type: ""
+        name: lxcfs-runpath
+      - hostPath:
+          path: /opt/tiger/tce/network
+          type: ""
+        name: network
+      - hostPath:
+          path: /opt/tiger/tce/containers/inf.aibrix.benchmark
+          type: DirectoryOrCreate
+        name: opt-tiger-data-log
+      - hostPath:
+          path: /opt/tiger/tce/containers/inf.aibrix.benchmark
+          type: DirectoryOrCreate
+        name: opt-tiger-toutiao-log
+      - hostPath:
+          path: /opt/tiger/pyutil
+          type: ""
+        name: pyutil
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 64Mi
+        name: run
+      - hostPath:
+          path: /run/lock
+          type: ""
+        name: run-lock
+      - hostPath:
+          path: /opt/tiger/ss_bin
+          type: ""
+        name: ss-bin
+      - hostPath:
+          path: /sys
+          type: ""
+        name: sys
+      - hostPath:
+          path: /etc/resolv.conf
+          type: ""
+        name: sys-resolv-conf
+      - hostPath:
+          path: /opt/tiger/tce/tce_tools/bin/binary
+          type: ""
+        name: tce-tools-binary
+      - hostPath:
+          path: /opt/tiger/tce/containers/inf.aibrix.benchmark
+          type: DirectoryOrCreate
+        name: var-log-tiger
+      - hostPath:
+          path: /opt/tiger/yarn_deploy
+          type: ""
+        name: yarn-deploy
+  treatments:
+    # - data:
+    #     apiVersion: core.tce.byted.org/v1alpha1
+    #     kind: IdentityTreatment
+    #     metadata:
+    #       name: inf-aibrix-benchmark-217581f2-ai
+    #       namespace: default
+    #     spec:
+    #       authType: psm
+    #       user: dave.li
+    #     status: {}
+    #   type: PreTreatment
+    # - data:
+    #     apiVersion: core.tce.byted.org/v1alpha1
+    #     kind: PDBTreatment
+    #     metadata:
+    #       name: inf-aibrix-benchmark-217581f2-ai
+    #       namespace: default
+    #     spec:
+    #       maxUnavailable: 15%
+    #       realWorkloadName: inf-aibrix-benchmark-217581f2-ai
+    #     status: {}
+    #   type: PostTreatment
+    # - data:
+    #     apiVersion: core.tce.byted.org/v1alpha1
+    #     kind: VolumeTreatment
+    #     metadata:
+    #       name: inf-aibrix-benchmark-217581f2-ai
+    #       namespace: default
+    #     spec:
+    #       referencedVolumes:
+    #       - byteNas:
+    #           capacity: 10000Gi
+    #           fuse:
+    #             VolumeAttributes:
+    #               bytefuseOpts: bytenas_fuse_attr_timeout_sec=30,bytenas_fuse_entry_timeout_sec=30,bytenas_fuse_wb_trust_server=true,bytenas_fuse_write_cache=1
+    #               sdkVersion: 1.3.0
+    #             VolumeHandle: /hl_nas_v6arnold7/87.239.1.135
+    #           name: aibrix-models
+    #         mountPaths:
+    #           inf-aibrix-benchmark-217581f2-ai: /mnt/bn/aibrix-models
+    #     status: {}
+    #   type: PreTreatment

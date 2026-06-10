@@ -1,0 +1,600 @@
+apiVersion: core.tce.byted.org/v1alpha1
+kind: DeploymentWorkload
+metadata:
+  name: batch-tce-vllm-6281d2a8 # job name
+  namespace: default
+  annotations:
+    core.tce.byted.org/updatetrigger: "true" # required for deployment creation.
+  labels:
+    name: batch-tce-vllm-6281d2a8 # job name
+    batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2 # planner_decision.job_id
+    model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model # job name + lower(model name: extracted last segment from template.model_source.uri)
+    psm: inf.aibrix.platform # template.psm
+spec:
+  deploymentMeta:
+    labels:
+      name: batch-tce-vllm-6281d2a8 # job name
+      batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2 # planner_decision.job_id
+      model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model # metadata.labels["model.aibrix.ai/name"]
+      psm: inf.aibrix.platform # template.psm
+    annotations:
+      bytedance.quota.salemode: scheduled # planner_decision.resource_details[].salemode
+      deployment.tce.kubernetes.io/gpu-type: NVIDIA-A30 # planner_decision.resource_details[].resource[].acceleratorType
+      # TODO: Unsupported
+      # "deployment.tce.kubernetes.io/overCommitRatioCPU": "1.200",
+      # "deployment.tce.kubernetes.io/overCommitRatioGPU": "1.000",
+      # "deployment.tce.kubernetes.io/overCommitRatioMemory": "1.500",
+      deployment.tce.kubernetes.io/requestCpuUserDemand: "11" # planner_decision.resource_details[].resource[].cpu if available
+      deployment.tce.kubernetes.io/requestMemUserDemand: 125Gi # planner_decision.resource_details[].resource[].memory if available
+      deployment.tce.kubernetes.io/requestGpuUserDemand: "1" # planner_decision.resource_details[].resource[].acceleratorCount
+      # TODO: Unsupported
+      # "pod.tce.kubernetes.io/netcls": "481071596",
+      queue-name: compute-3530-yg-federationgpu-non.standard.g19-default-guarantee # planner_decision.resource_details[].resourcePoolName
+      # TODO: Unsupported
+      # "tce-planning.byted.org/node": "9212820",
+      vpa.katalyst.kubewharf.io/enable: "true"
+  featureGates:
+    # Matches Octagram default; can omit
+    # - name: AutoEvictionEnable
+    #   value: false
+    # Whitelisted, omit to use default "tce"
+    # - name: CloudNativeLabel
+    #   value:
+    #     cloudnative-application-platform: mlsys.bernard
+    # Matches Octagram default; can omit
+    # - name: ContainerPrivileged
+    #   value: false
+    - name: ContainerResourceView
+      value: container
+    # Matches Octagram effective default runtime (runc); can omit
+    # - name: ContainerRuntime
+    #   value: Disabled
+    # Matches Octagram default; can omit
+    # - name: ContainerSRIOV
+    #   value: false
+    - name: ContainerShmSize
+      value: 100000
+    # Matches Octagram default; can omit
+    # - name: ContainerUlimits
+    #   value: ""
+    # Matches Octagram default; can omit
+    # - name: DNSPolicy
+    #   value: Default
+    # Matches Octagram default; can omit
+    # - name: DaemonIncludeNotReadyNode
+    #   value: false
+    # Matches Octagram default; can omit
+    # - name: HistoryConsulWeight
+    #   value: false
+    - name: IPv6OnlyCompatible
+      value: true
+    - name: UseScheduledResource
+      value: true
+    - name: KatalystMemoryEnhancement
+      value:
+        numa_binding: "false" # false if planner_decision.resource_details[].qos_level is "shared_cores"
+    - name: KatalystQosEnhancement
+      value:
+        katalyst.kubewharf.io/memory_enhancement: '{"numa_binding":"false","numa_exclusive":"false"}' # false if planner_decision.resource_details[].qos_level is "shared_cores"
+    - name: KatalystQosLevel
+      value: shared_cores # planner_decision.resource_details[].qos_level
+    # Matches Octagram default; can omit
+    # - name: RDMA
+    #   value: false
+    # Matches Octagram default; can omit
+    # - name: SolarServiceInplaceUpgrade
+    #   value: false
+  deployStrategy:
+    replicas: 1
+    selector:
+      matchLabels:
+        name: batch-tce-vllm-6281d2a8 # job name
+        batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2 # planner_decision.job_id
+        model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model # metadata.labels["model.aibrix.ai/name"]
+        psm: inf.aibrix.platform # template.psm
+    strategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+    minReadySeconds: 10
+    revisionHistoryLimit: 5
+    progressDeadlineSeconds: 2147483647 # Max value for int32
+  podBase:
+    annotations:
+      # Added by AutoEvictionEnable feature gate
+      # AutoEvictionEnable: "false"
+      AvailableZoneRebalance: "true"
+      bytedance.com/main-container-name: llm-engine
+      bytedance.quota.salemode: scheduled # planner_decision.resource_details[].salemode
+      godel.bytedance.com/without-preemption-protection: "true"
+      # Added by KatalystMemoryEnhancement feature gate
+      # katalyst.cloud/memory_enhancement: '{"numa_binding":"false"}'
+      # Added by KatalystQosLevel feature gate
+      # katalyst.cloud/qos_level: shared_cores
+      # Added by KatalystQosEnhancement feature gate
+      # katalyst.kubewharf.io/memory_enhancement: '{"numa_binding":"false","numa_exclusive":"false"}'
+      # Added by KatalystQosLevel feature gate
+      # katalyst.kubewharf.io/qos_level: shared_cores
+      pod.kubernetes.io/explicit.deletion: "true"
+      pod.tce.kubernetes.io/autoport: "1"
+      # Added by ContainerShmSize feature gate
+      # pod.tce.kubernetes.io/container-shm-size: "104857600000"
+      # TODO: unsupported
+      # pod.tce.kubernetes.io/netcls: "481071596"
+      # pod.tce.kubernetes.io/netcls-version: "v2"
+      pod.tce.kubernetes.io/requestCpuUserDemand: "11" # planner_decision.resource_details[].resource[].cpu if available
+      pod.tce.kubernetes.io/requestMemUserDemand: 125Gi # planner_decision.resource_details[].resource[].memory if available
+      pod.tce.kubernetes.io/requestGpuUserDemand: "1" # planner_decision.resource_details[].resource[].acceleratorCount
+      queue-name: compute-3530-yg-federationgpu-non.standard.g19-default-guarantee # planner_decision.resource_details[].resourcePoolName
+    containers:
+      - name: llm-engine
+        image: hub.byted.org/aibrix/inf.aibrix.vllm:1.0.0.135_nydus # template.engine.image
+        imagePullPolicy: IfNotPresent
+        isMainContainer: true
+        env:
+          - name: AIBRIX_LLM_ENGINE
+            value: vllm # template.engine.type
+          - name: HDFS_MODEL_PATH
+            value: hdfs://haruna/home/byte_mlsys_bernard/ssd/models/Qwen3.5-0.8B-Merlin-HF/1.0.c84b5056/model_store_open_source_model # template.model_source.uri if template.model_source.type is "local" or "hdfs"
+          - name: MODEL_NAME
+            value: model_store_open_source_model # TODO: extract last segment from template.model_source.uri
+          - name: AIBRIX_SERVED_MODEL_NAME
+            value: batch-tce-vllm-6281d2a8-model_store_open_source_model # metadata.labels["model.aibrix.ai/name"]
+          - name: EXTRA_PARAMETERS
+            value: --gpu-memory-utilization 0.85 # template.engine.serve_args
+          - name: TP_SIZE
+            value: "1" # template.engine.parallelism.tp if available, default 1
+          - name: PP_SIZE
+            value: "1" # template.engine.parallelism.pp if available, default 1
+          - name: DP_SIZE
+            value: "1" # template.engine.parallelism.dp if available, default 1
+          # Auto-added by Octagram
+          # - name: MY_CPU_LIMIT
+          #   valueFrom:
+          #     resourceFieldRef:
+          #       containerName: inf-aibrix-kvcache-6281d2a8-ai
+          #       divisor: "0"
+          #       resource: limits.cpu
+          # - name: MY_CPU_REQUEST
+          #   valueFrom:
+          #     resourceFieldRef:
+          #       containerName: inf-aibrix-kvcache-6281d2a8-ai
+          #       divisor: "0"
+          #       resource: requests.cpu
+          - name: MY_GPU_REQUEST
+            value: "1" # planner_decision.resource_details[].resource[].acceleratorCount
+          # Auto-added by Octagram
+          # - name: MY_HOST_IP
+          #   valueFrom:
+          #     fieldRef:
+          #       apiVersion: v1
+          #       fieldPath: metadata.annotations['pod.tce.kubernetes.io/host.ipv4']
+          # - name: MY_HOST_IPV6
+          #   valueFrom:
+          #     fieldRef:
+          #       apiVersion: v1
+          #       fieldPath: metadata.annotations['pod.tce.kubernetes.io/host.ipv6']
+          # - name: MY_MEM_LIMIT
+          #   valueFrom:
+          #     resourceFieldRef:
+          #       containerName: inf-aibrix-kvcache-6281d2a8-ai
+          #       divisor: "0"
+          #       resource: limits.memory
+          # - name: MY_MEM_REQUEST
+          #   valueFrom:
+          #     resourceFieldRef:
+          #       containerName: inf-aibrix-kvcache-6281d2a8-ai
+          #       divisor: "0"
+          #       resource: requests.memory
+          # - name: MY_POD_IP
+          #   valueFrom:
+          #     fieldRef:
+          #       apiVersion: v1
+          #       fieldPath: status.podIP
+          # - name: MY_POD_IPV6
+          #   valueFrom:
+          #     fieldRef:
+          #       apiVersion: v1
+          #       fieldPath: metadata.annotations['pod.tce.kubernetes.io/pod.ipv6']
+          # - name: MY_POD_NAME
+          #   valueFrom:
+          #     fieldRef:
+          #       apiVersion: v1
+          #       fieldPath: metadata.name
+          # - name: MY_POD_NAMESPACE
+          #   valueFrom:
+          #     fieldRef:
+          #       apiVersion: v1
+          #       fieldPath: metadata.namespace
+          # Added by IdentityTreatment
+          # - name: SEC_TOKEN_PATH
+          #   value: /etc/tce_dynamic/identity.token
+          - name: TCE_CLUSTER
+            value: Federation
+          # TODO: unsupported
+          # - name: TCE_CLUSTER_ID
+          #   value: "31640358"
+          # Auto-added by Octagram
+          # - name: TCE_CONTAINER_NAME
+          #   value: inf-aibrix-kvcache-6281d2a8-ai
+          # - name: TCE_ENABLE_IPV6
+          #   value: "true"
+          # - name: TCE_ENABLE_SIDECAR
+          #   value: "100"
+          - name: TCE_ENV
+            value: prod
+          # Auto-added by Octagram
+          # - name: TCE_INSTALL_SIDECAR
+          #   value: "True"
+          # TODO: Unsupported
+          # - name: TCE_INSTANCE_WEIGHT
+          #   value: "10"
+          - name: TCE_INTERNAL_IDC
+            value: YG # Extracted from uppercase(planner_decision.resource_details[].endpoint_cluster(format [CLUSTER-IDC]))
+          - name: TCE_PHYSICAL_CLUSTER
+            value: Federation # Extracted from uppercase(planner_decision.resource_details[].endpoint_cluster(format [CLUSTER-IDC]))
+          - name: TCE_PRIMARY_PORT
+            value: fake_port
+          - name: TCE_STAGE
+            value: all_dc
+          - name: LOAD_SERVICE_PSM
+            value: inf.aibrix.platform # template.psm
+          - name: TCE_PSM
+            value: inf.aibrix.platform # template.psm
+        ports:
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+        resources:
+          cpu:
+            request: "11" # planner_decision.resource_details[].resources[].cpu if available
+            limit: "11" # planner_decision.resource_details[].resource[].cpu if available
+          memory:
+            request: 125Gi # planner_decision.resource_details[].resources[].memory if available
+            limit: 125Gi # planner_decision.resource_details[].resource[].memory if available
+          # This is defined by planner_decision.resource_details[].resource[].acceleratorCategory
+          # make sure octagram also support "xpu" and "npu"
+          gpu:
+            request: "1" # planner_decision.resource_details[].resource[].acceleratorCount
+            limit: "1" # planner_decision.resource_details[].resource[].acceleratorCount
+        volumeMounts:
+          # Added by VolumeTreatment
+          # - name: bytefuse-aibrix-models
+          #   mountPath: /mnt/bn/aibrix-models
+          - name: bernard
+            mountPath: /opt/tiger/bernard
+            readOnly: true
+          - name: bernard-tce-tools
+            mountPath: /opt/tiger/tce/tce_tools
+            readOnly: true
+          - name: cgroups
+            mountPath: /sys/fs/cgroup
+            readOnly: true
+          - name: chadc
+            mountPath: /opt/tiger/chadc
+            readOnly: true
+          - name: consul-deploy
+            mountPath: /opt/tiger/consul_deploy
+            readOnly: true
+          - name: core
+            mountPath: /opt/tiger/cores
+            readOnly: true
+          - name: databus
+            mountPath: /tmp
+          - name: databus-new
+            mountPath: /opt/tmp
+            readOnly: true
+          - name: dist
+            mountPath: /opt/tiger/dist/
+            readOnly: true
+          - name: host-usr-local-tao-agent-modules-bvc
+            mountPath: /usr/local/tao/agent/modules/bvc/
+            readOnly: true
+          - name: jdk
+            mountPath: /opt/tiger/jdk
+            readOnly: true
+          - name: linux-gnu
+            mountPath: /opt/tiger/x86_64-linux-gnu
+            readOnly: true
+          # Added by SetContainerResourceView feature gate
+          # - name: lxcfs-proc-cpuinfo
+          #   mountPath: /proc/cpuinfo
+          #   readOnly: true
+          # - name: lxcfs-proc-diskstats
+          #   mountPath: /proc/diskstats
+          #   readOnly: true
+          # - name: lxcfs-proc-meminfo
+          #   mountPath: /proc/meminfo
+          #   readOnly: true
+          # - name: lxcfs-proc-stat
+          #   mountPath: /proc/stat
+          #   readOnly: true
+          # - name: lxcfs-proc-swaps
+          #   mountPath: /proc/swaps
+          #   readOnly: true
+          # - name: lxcfs-proc-uptime
+          #   mountPath: /proc/uptime
+          #   readOnly: true
+          # - name: lxcfs-runpath
+          #   mountPath: /root/tce/lxcfs/run
+          #   readOnly: true
+          - name: network
+            mountPath: /opt/tiger/tce/network
+            readOnly: true
+          - name: opt-tiger-data-log
+            mountPath: /opt/tiger/data/log
+            subPath: $(MY_POD_NAME)/data/log
+          - name: opt-tiger-toutiao-log
+            mountPath: /opt/tiger/toutiao/log
+            subPath: $(MY_POD_NAME)/toutiao/log
+          - name: pyutil
+            mountPath: /opt/tiger/pyutil
+            readOnly: true
+          - name: run
+            mountPath: /run
+          - name: run-lock
+            mountPath: /run/lock
+            readOnly: true
+          - name: ss-bin
+            mountPath: /opt/tiger/ss_bin
+            readOnly: true
+          - name: sys
+            mountPath: /sys
+            readOnly: true
+          - name: sys-resolv-conf
+            mountPath: /etc/resolv.conf
+            readOnly: true
+          # Added by IdentityTreatment
+          # - name: tce-identity-token
+          #   mountPath: /etc/tce_dynamic
+          - name: tce-tools-binary
+            mountPath: /opt/tiger/tce/tce_tools/bin/binary
+            readOnly: true
+          - name: var-log-tiger
+            mountPath: /var/log/tiger
+            subPath: $(MY_POD_NAME)/var/log/tiger
+          - name: yarn-deploy
+            mountPath: /opt/tiger/yarn_deploy
+            readOnly: true
+        livenessProbe:
+          exec:
+            command:
+              - bash
+              - -c
+              - /opt/tiger/bernard/bernard_tools/bin/liveness_check.sh
+          initialDelaySeconds: 180
+          failureThreshold: 5
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+              - bash
+              - -c
+              - /opt/tiger/tce/tce_tools/bin/readiness_check.sh
+          failureThreshold: 2
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 30 # template.engine.ready_timeout_seconds
+        lifecycle:
+          preStop:
+            exec:
+              command:
+                - bash
+                - -c
+                - /opt/tiger/tce/tce_tools/bin/pre_stop; /home/tiger/.op/docker_pre_stop.sh;
+    nodeSelector:
+      accelerator: NVIDIA-A30 # planner_decision.resource_details[].resource[].accelerator
+      nodeLevel: non-standard-g19 # planner_decision.resource_details[].logical_cluster
+    hostNetwork: true
+    # TODO: not supported
+    # "priorityClassName": "guaranteed-primary-preemptable",
+    terminationGracePeriodSeconds: 30
+    volumes:
+      # Added by VolumeTreatment
+      # - name: bytefuse-aibrix-models
+      #   persistentVolumeClaim:
+      #     claimName: bytefuse-aibrix-models
+      - name: bernard
+        hostPath:
+          path: /opt/tiger/bernard
+          type: ""
+      - name: bernard-tce-tools
+        hostPath:
+          path: /opt/tiger/bernard/bernard_tools
+          type: ""
+      - name: cgroups
+        hostPath:
+          path: /sys/fs/cgroup
+          type: ""
+      - name: chadc
+        hostPath:
+          path: /opt/tiger/chadc
+          type: ""
+      - name: consul-deploy
+        hostPath:
+          path: /opt/tiger/consul_deploy
+          type: ""
+      - name: core
+        hostPath:
+          path: /opt/tiger/cores
+          type: DirectoryOrCreate
+      - name: databus
+        hostPath:
+          path: /tmp
+          type: ""
+      - name: databus-new
+        hostPath:
+          path: /opt/tmp
+          type: ""
+      - name: dist
+        hostPath:
+          path: /opt/tiger/dist/
+          type: ""
+      - name: host-usr-local-tao-agent-modules-bvc
+        hostPath:
+          path: /usr/local/tao/agent/modules/bvc/
+          type: ""
+      - name: jdk
+        hostPath:
+          path: /opt/tiger/jdk
+          type: ""
+      - name: linux-gnu
+        hostPath:
+          path: /usr/lib/x86_64-linux-gnu
+          type: ""
+      # Added by SetContainerResourceView feature gate
+      # - name: lxcfs-proc-cpuinfo
+      #   hostPath:
+      #     path: /proc/cpuinfo
+      #     type: ""
+      # - name: lxcfs-proc-diskstats
+      #   hostPath:
+      #     path: /proc/diskstats
+      #     type: ""
+      # - name: lxcfs-proc-meminfo
+      #   hostPath:
+      #     path: /proc/meminfo
+      #     type: ""
+      # - name: lxcfs-proc-stat
+      #   hostPath:
+      #     path: /proc/stat
+      #     type: ""
+      # - name: lxcfs-proc-swaps
+      #   hostPath:
+      #     path: /proc/swaps
+      #     type: ""
+      # - name: lxcfs-proc-uptime
+      #   hostPath:
+      #     path: /proc/uptime
+      #     type: ""
+      # - name: lxcfs-runpath
+      #   hostPath:
+      #     path: /root/tce/lxcfs/run
+      #     type: ""
+      - name: network
+        hostPath:
+          path: /opt/tiger/tce/network
+          type: ""
+      - name: opt-tiger-data-log
+        hostPath:
+          path: /opt/tiger/tce/containers/inf.aibrix.platform
+          type: DirectoryOrCreate
+      - name: opt-tiger-toutiao-log
+        hostPath:
+          path: /opt/tiger/tce/containers/inf.aibrix.platform
+          type: DirectoryOrCreate
+      - name: var-log-tiger
+        hostPath:
+          path: /opt/tiger/tce/containers/inf.aibrix.platform
+          type: DirectoryOrCreate
+      - name: pyutil
+        hostPath:
+          path: /opt/tiger/pyutil
+          type: ""
+      - name: run
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Mi
+      - name: run-lock
+        hostPath:
+          path: /run/lock
+          type: ""
+      - name: ss-bin
+        hostPath:
+          path: /opt/tiger/ss_bin
+          type: ""
+      - name: sys
+        hostPath:
+          path: /sys
+          type: ""
+      - name: sys-resolv-conf
+        hostPath:
+          path: /etc/resolv.conf
+          type: ""
+      # Added by IdentityTreatment
+      # - name: tce-identity-token
+      #   projected:
+      #     defaultMode: 420
+      #     sources:
+      #       - secret:
+      #           name: tce-id.inf-aibrix-kvcache-6281d2a8-ai
+      #           items:
+      #             - key: inf-aibrix-kvcache-6281d2a8-ai-identity
+      #               path: identity.token
+      #             - key: inf-aibrix-kvcache-6281d2a8-ai-bundle
+      #               path: bundle.pem
+      #             - key: inf-aibrix-kvcache-6281d2a8-ai-certificate
+      #               path: certificate.pem
+      #             - key: inf-aibrix-kvcache-6281d2a8-ai-key
+      #               path: key.pem
+      #             - key: inf-aibrix-kvcache-6281d2a8-ai-jwt_config
+      #               path: jwt_config.json
+      #       - secret:
+      #           name: tce-jwt-bundles
+      #           items:
+      #             - key: jwt_bundle
+      #               path: jwt_bundle.jwk
+      - name: tce-tools-binary
+        hostPath:
+          path: /opt/tiger/tce/tce_tools/bin/binary
+          type: ""
+      - name: yarn-deploy
+        hostPath:
+          path: /opt/tiger/yarn_deploy
+          type: ""
+  treatments:
+    - data:
+        apiVersion: core.tce.byted.org/v1alpha1
+        kind: IdentityTreatment
+        metadata:
+          name: batch-tce-vllm-6281d2a8
+          namespace: default
+        spec:
+          authType: psm
+          user: jingyuan.zhang0929
+        status: {}
+      type: PreTreatment
+    - data:
+        apiVersion: core.tce.byted.org/v1alpha1
+        kind: HPATreatment
+        metadata:
+          name: batch-tce-vllm-6281d2a8
+          namespace: default
+        spec:
+          hpaExtensionConfig:
+            resourceUtilizationConfig:
+              rules:
+                - effectiveWindow:
+                    startTime: "202605221800"
+                    lastMinutes: 1440
+                    location: utc
+                  maxReplica: 1
+                  minReplica: 1
+                  resourcePercentage:
+                    gpu: 1
+                - maxReplica: 0
+                  minReplica: 0
+                  resourcePercentage:
+                    gpu: 1
+        status: {}
+      type: PostTreatment

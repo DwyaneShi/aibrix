@@ -25,9 +25,9 @@ import aibrix.batch.constant as constant
 from aibrix import envs
 from aibrix.batch.client import EndpointSource
 from aibrix.batch.client.sources import DiscoveryEndpointSource, GatewayEndpointSource
+from aibrix.batch.internal.octagram_renderer import OctagramManifestRenderer
 from aibrix.batch.job_driver.runtime import Endpoint, RuntimeBase, register_runtime
 from aibrix.batch.job_entity import BatchJob, BatchJobError, BatchJobErrorCode
-from aibrix.batch.internal.octagram_renderer import OctagramManifestRenderer
 from aibrix.batch.state import JobEntityManager
 from aibrix.context import InfrastructureContext
 from aibrix.logger import init_logger
@@ -125,7 +125,7 @@ class OctagramRuntime(RuntimeBase):
 
         resource_detail = resource_details[0]
         workload = self._renderer.render(job.job_id, job.spec, resource_detail)
-        cluster = (resource_detail.endpoint_cluster or "").lower()
+        cluster = resource_detail.endpoint_cluster or ""
         namespace = workload["metadata"].get("namespace", _DEFAULT_NAMESPACE)
         workload_name = workload["metadata"]["name"]
         model_name = workload["metadata"]["labels"]["model.aibrix.ai/name"]
@@ -242,7 +242,8 @@ class OctagramRuntime(RuntimeBase):
         if not psm:
             return None
         idc_name = getattr(self._renderer, "idc_name", "")
-        return f"{psm}.service.{idc_name}" if idc_name else psm
+        consul_idc_name = idc_name.lower()
+        return f"{psm}.service.{consul_idc_name}" if consul_idc_name else psm
 
     async def _apply_workload(
         self, cluster: str, namespace: str, workload: dict[str, Any]
@@ -302,7 +303,11 @@ class OctagramRuntime(RuntimeBase):
                 available = max(
                     int(item.get("available") or 0) for item in replicas_statuses
                 )
-                if available >= replicas:
+                if (replicas == 0 and available == 0) or (
+                    replicas > 0 and available >= replicas
+                ):
+                    # If explected replica is 0, we need to wait for available to become 0,
+                    # otherwise we need to wait for available to become >= replicas.
                     return
             if asyncio.get_running_loop().time() >= deadline:
                 raise BatchJobError(
@@ -315,22 +320,105 @@ class OctagramRuntime(RuntimeBase):
             await asyncio.sleep(1)
 
     async def _delete_workload(self, handle: OctagramHandle) -> None:
+        workload_path = self._workload_path(
+            handle.cluster, handle.namespace, handle.workload_name
+        )
+
+        # Try direct deletion first. If Octagram rejects it with a non-404 HTTP
+        # error, scale the workload down to zero, wait for it to settle, then
+        # retry the delete once.
+        for retry_after_scale in (False, True):
+            try:
+                response = await self._octagram_request("DELETE", workload_path)
+            except httpx.HTTPStatusError as ex:
+                if ex.response.status_code == 404:
+                    logger.info(
+                        "Octagram workload delete returned 404; treating as already deleted",
+                        cluster=handle.cluster,
+                        namespace=handle.namespace,
+                        workload=handle.workload_name,
+                        retried_after_scale=retry_after_scale,
+                    )  # type: ignore[call-arg]
+                    return
+                if retry_after_scale:
+                    raise BatchJobError(
+                        code=BatchJobErrorCode.RESOURCE_DELETION_ERROR,
+                        message=(
+                            "Octagram workload delete failed after scale to zero "
+                            f"({ex.response.status_code}): {ex.response.text}"
+                        ),
+                    ) from ex
+                await self._scale_workload_to_zero(handle, ex)
+                continue
+
+            if response.get("error"):
+                raise BatchJobError(
+                    code=BatchJobErrorCode.RESOURCE_DELETION_ERROR,
+                    message=f"Octagram workload delete failed: {response['error']}",
+                )
+            return
+
+    async def _scale_workload_to_zero(
+        self, handle: OctagramHandle, delete_error: httpx.HTTPStatusError
+    ) -> None:
+        delete_context = (
+            "Octagram workload delete failed "
+            f"({delete_error.response.status_code}): {delete_error.response.text}"
+        )
+
+        logger.warning(
+            "Octagram workload delete failed, falling back to scale-to-zero",
+            cluster=handle.cluster,
+            namespace=handle.namespace,
+            workload=handle.workload_name,
+            status_code=delete_error.response.status_code,
+            error=delete_error.response.text,
+        )  # type: ignore[call-arg]
         try:
             response = await self._octagram_request(
-                "DELETE",
-                self._workload_path(
-                    handle.cluster, handle.namespace, handle.workload_name
+                "PATCH",
+                self._workload_scale_path(
+                    handle.cluster,
+                    handle.namespace,
+                    handle.workload_name,
+                    replicas=0,
                 ),
             )
         except httpx.HTTPStatusError as ex:
-            if ex.response.status_code != 404:
-                raise
-            return
+            if ex.response.status_code == 404:
+                return
+            raise BatchJobError(
+                code=BatchJobErrorCode.RESOURCE_DELETION_ERROR,
+                message=(
+                    f"{delete_context}; fallback scale to zero failed "
+                    f"({ex.response.status_code}): {ex.response.text}"
+                ),
+            ) from ex
         if response.get("error"):
             raise BatchJobError(
                 code=BatchJobErrorCode.RESOURCE_DELETION_ERROR,
-                message=f"Octagram workload delete failed: {response['error']}",
+                message=(
+                    f"{delete_context}; fallback scale to zero failed: "
+                    f"{response['error']}"
+                ),
             )
+        try:
+            # The scale endpoint is asynchronous. Wait until Octagram reports the
+            # workload as synced at zero replicas before retrying delete.
+            await self._wait_for_workload_ready(
+                cluster=handle.cluster,
+                namespace=handle.namespace,
+                workload_name=handle.workload_name,
+                replicas=0,
+            )
+        except BatchJobError as ex:
+            raise BatchJobError(
+                code=BatchJobErrorCode.RESOURCE_DELETION_ERROR,
+                message=(
+                    f"{delete_context}; fallback scale to zero did not "
+                    f"reach synced: {ex.message}"
+                ),
+            ) from ex
 
     def _resolve_gateway_domain(self) -> str:
         configured = getattr(envs, "OCTAGRAM_GATEWAY_DOMAIN", None)
@@ -347,6 +435,18 @@ class OctagramRuntime(RuntimeBase):
         return (
             f"{self._gateway_domain}/api/v1/clusters/{cluster}/namespaces/"
             f"{namespace}/deploymentworkloads/{workload_name}"
+        )
+
+    def _workload_scale_path(
+        self,
+        cluster: str,
+        namespace: str,
+        workload_name: str,
+        replicas: int,
+    ) -> str:
+        return (
+            f"{self._workload_path(cluster, namespace, workload_name)}"
+            f"/scale?replicas={replicas}"
         )
 
     async def _octagram_request(

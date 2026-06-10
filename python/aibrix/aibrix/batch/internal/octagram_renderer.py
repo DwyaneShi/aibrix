@@ -32,7 +32,6 @@ _BASE_FEATURE_GATES = [
 
 _VOLUME_MOUNTS = [
     {"name": "bernard", "mountPath": "/opt/tiger/bernard", "readOnly": True},
-    {"name": "bernard-pre-download", "mountPath": "/opt/tiger/bernard_pre_download"},
     {
         "name": "bernard-tce-tools",
         "mountPath": "/opt/tiger/tce/tce_tools",
@@ -97,10 +96,6 @@ _VOLUME_MOUNTS = [
 _VOLUMES = [
     {"name": "bernard", "hostPath": {"path": "/opt/tiger/bernard", "type": ""}},
     {
-        "name": "bernard-pre-download",
-        "hostPath": {"path": "/opt/tiger/bernard_pre_download", "type": ""},
-    },
-    {
         "name": "bernard-tce-tools",
         "hostPath": {"path": "/opt/tiger/bernard/bernard_tools", "type": ""},
     },
@@ -130,20 +125,6 @@ _VOLUMES = [
         "name": "network",
         "hostPath": {"path": "/opt/tiger/tce/network", "type": ""},
     },
-    {
-        "name": "opt-tiger-data-log",
-        "hostPath": {
-            "path": "/opt/tiger/tce/containers/inf.aibrix.kvcache",
-            "type": "DirectoryOrCreate",
-        },
-    },
-    {
-        "name": "opt-tiger-toutiao-log",
-        "hostPath": {
-            "path": "/opt/tiger/tce/containers/inf.aibrix.kvcache",
-            "type": "DirectoryOrCreate",
-        },
-    },
     {"name": "pyutil", "hostPath": {"path": "/opt/tiger/pyutil", "type": ""}},
     {"name": "run", "emptyDir": {"medium": "Memory", "sizeLimit": "64Mi"}},
     {"name": "run-lock", "hostPath": {"path": "/run/lock", "type": ""}},
@@ -154,15 +135,37 @@ _VOLUMES = [
         "name": "tce-tools-binary",
         "hostPath": {"path": "/opt/tiger/tce/tce_tools/bin/binary", "type": ""},
     },
-    {
-        "name": "var-log-tiger",
-        "hostPath": {
-            "path": "/opt/tiger/tce/containers/inf.aibrix.kvcache",
-            "type": "DirectoryOrCreate",
-        },
-    },
     {"name": "yarn-deploy", "hostPath": {"path": "/opt/tiger/yarn_deploy", "type": ""}},
 ]
+
+
+def _log_host_path(psm: str) -> Dict[str, str]:
+    return {
+        "path": f"/opt/tiger/tce/containers/{psm}",
+        "type": "DirectoryOrCreate",
+    }
+
+
+def _volumes(psm: Optional[str]) -> List[Dict[str, Any]]:
+    volumes = deepcopy(_VOLUMES)
+    if not psm:
+        return volumes
+
+    log_volumes = [
+        {"name": "opt-tiger-data-log", "hostPath": _log_host_path(psm)},
+        {"name": "opt-tiger-toutiao-log", "hostPath": _log_host_path(psm)},
+        {"name": "var-log-tiger", "hostPath": _log_host_path(psm)},
+    ]
+    insert_at = next(
+        (
+            index
+            for index, volume in enumerate(volumes)
+            if volume["name"] == "pyutil"
+        ),
+        len(volumes),
+    )
+    volumes[insert_at:insert_at] = log_volumes
+    return volumes
 
 
 class OctagramManifestRenderer(_RendererSupport):
@@ -466,7 +469,7 @@ class OctagramManifestRenderer(_RendererSupport):
             },
             "hostNetwork": True,
             "terminationGracePeriodSeconds": 30,
-            "volumes": deepcopy(_VOLUMES),
+            "volumes": _volumes(manifest["metadata"]["labels"].get("psm")),
         }
 
     def _apply_treatments(
@@ -678,9 +681,9 @@ class OctagramManifestRenderer(_RendererSupport):
     ) -> Tuple[str, str]:
         if not endpoint_cluster:
             return "", ""
-        # Lower-case before splitting: consul cluster lookup is case-sensitive
-        # and the upstream endpoint_cluster may arrive mixed-case (e.g. Echo-HL).
-        parts = endpoint_cluster.lower().rsplit("-", 1)
+        # Preserve the original casing for manifest/env fields. Consul-specific
+        # normalization happens later in the runtime when composing discovery IDs.
+        parts = endpoint_cluster.rsplit("-", 1)
         if len(parts) == 1:
             return parts[0], ""
         return parts[0], parts[1]
