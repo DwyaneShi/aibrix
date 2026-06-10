@@ -33,11 +33,7 @@ const defaultRoleName = "default"
 // extra_body.aibrix.resource_allocation payload. Provider-specific details are
 // mapped best-effort; missing fields are omitted. Replicas defaults to 1
 // (single-replica only today).
-func buildTCEResourceAllocation(
-	prov *rmtypes.ProvisionResult,
-	gpuType string,
-	gpusPerReplica int,
-) *plannerclient.TCEResourceAllocation {
+func buildTCEResourceAllocation(prov *rmtypes.ProvisionResult) *plannerclient.TCEResourceAllocation {
 	allocation := &plannerclient.TCEResourceAllocation{
 		ProvisionID: prov.ProvisionID,
 	}
@@ -51,10 +47,6 @@ func buildTCEResourceAllocation(
 		Replica:             1,
 		AcceleratorCategory: "gpu",
 	}
-	if !strings.EqualFold(gpuType, "CPU") {
-		resource.AcceleratorType = gpuType
-	}
-	resource.AcceleratorCount = gpusPerReplica
 
 	populateTCEDetails(details, &resource, prov)
 

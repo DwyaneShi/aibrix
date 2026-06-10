@@ -43,6 +43,9 @@ func init() {
 	RegisterBackend(rmtypes.ResourceProvisionTypeTCEMock, func(provisioner.Provisioner) plannerBackend {
 		return &tceMockBackend{}
 	})
+	RegisterPlanningPolicy(rmtypes.ResourceProvisionTypeTCEMock, PlanningPolicyTypeSimple, func(cfg PolicyConfig) (PlanningPolicy[*queuedJob], error) {
+		return &SimplePolicy{cfg}, nil
+	})
 }
 
 // tceMockBackend embeds tcePlannerBackend so it inherits ValidateRequest
@@ -57,8 +60,8 @@ type tceMockBackend struct {
 // Schedule reuses tcePlannerBackend.Schedule but rewrites the credential
 // provider so the request is routed through the matching tceMock
 // provisioner rather than the real TCE one.
-func (b *tceMockBackend) Schedule(ctx context.Context, req *plannerapi.EnqueueRequest) (spec rmtypes.ResourceProvisionSpec, gpuType string, gpusPerReplica int, err error) {
-	spec, gpuType, gpusPerReplica, err = b.tcePlannerBackend.Schedule(ctx, req)
+func (b *tceMockBackend) Schedule(ctx context.Context, req *plannerapi.EnqueueRequest) (spec rmtypes.ResourceProvisionSpec, err error) {
+	spec, err = b.tcePlannerBackend.Schedule(ctx, req)
 	if err != nil {
 		return
 	}
@@ -66,8 +69,8 @@ func (b *tceMockBackend) Schedule(ctx context.Context, req *plannerapi.EnqueueRe
 	return
 }
 
-func (b *tceMockBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult, gpuType string, gpusPerReplica int) plannerclient.ResourceAllocation {
-	allocation := buildTCEResourceAllocation(prov, gpuType, gpusPerReplica)
+func (b *tceMockBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult) plannerclient.ResourceAllocation {
+	allocation := buildTCEResourceAllocation(prov)
 	if len(allocation.ResourceDetails) > 0 && len(allocation.ResourceDetails[0].Resources) > 0 {
 		applyTCEDemoOverrides(&allocation.ResourceDetails[0], &allocation.ResourceDetails[0].Resources[0])
 	} else {

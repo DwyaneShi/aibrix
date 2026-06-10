@@ -38,6 +38,9 @@ func init() {
 	RegisterBackend(rmtypes.ResourceProvisionTypeTCE, func(provisioner.Provisioner) plannerBackend {
 		return &tcePlannerBackend{}
 	})
+	RegisterPlanningPolicy(rmtypes.ResourceProvisionTypeTCE, PlanningPolicyTypeSimple, func(cfg PolicyConfig) (PlanningPolicy[*queuedJob], error) {
+		return &SimplePolicy{cfg}, nil
+	})
 }
 
 type tcePlannerBackend struct{}
@@ -49,8 +52,8 @@ func (b *tcePlannerBackend) ValidateRequest(req *plannerapi.EnqueueRequest) erro
 	return nil
 }
 
-func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueRequest) (spec rmtypes.ResourceProvisionSpec, gpuType string, gpusPerReplica int, err error) {
-	gpuType, gpusPerReplica, err = decodeAcceleratorFromTemplate(req.ModelTemplate)
+func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueRequest) (spec rmtypes.ResourceProvisionSpec, err error) {
+	gpuType, gpusPerReplica, err := decodeAcceleratorFromTemplate(req.ModelTemplate)
 	if err != nil {
 		return
 	}
@@ -99,9 +102,9 @@ func (b *tcePlannerBackend) logProvisionReady(prov *rmtypes.ProvisionResult) {
 		prov.ProvisionID, prov.Status, prov.TCE.MatchId, prov.TCE.MatchOrderUrl, groupResults)
 }
 
-func (b *tcePlannerBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult, gpuType string, gpusPerReplica int) plannerclient.ResourceAllocation {
+func (b *tcePlannerBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult) plannerclient.ResourceAllocation {
 	b.logProvisionReady(prov)
-	allocation := buildTCEResourceAllocation(prov, gpuType, gpusPerReplica)
+	allocation := buildTCEResourceAllocation(prov)
 	if spec.TimeWindow != nil && spec.TimeWindow.EndTime != nil {
 		allocation.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
 	}
