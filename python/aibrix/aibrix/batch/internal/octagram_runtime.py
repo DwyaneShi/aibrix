@@ -281,8 +281,11 @@ class OctagramRuntime(RuntimeBase):
                     self._workload_path(cluster, namespace, workload_name),
                 )
             except httpx.HTTPStatusError as ex:
+                error_code = BatchJobErrorCode.RESOURCE_CREATION_ERROR
+                if ex.response.status_code == 404:
+                    error_code = BatchJobErrorCode.RESOURCE_NOTFOUND_ERROR
                 raise BatchJobError(
-                    code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
+                    code=error_code,
                     message=(
                         "Octagram workload status check failed "
                         f"({ex.response.status_code}): {ex.response.text}"
@@ -296,10 +299,12 @@ class OctagramRuntime(RuntimeBase):
                     code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
                     message=f"Octagram workload '{workload_name}' failed",
                 )
-            replicas_statuses = status.get("replicasStatuses") or []
+            replicas_statuses = status.get("replicasStatuses") or [{}]
             if phase == "synced":
-                if not replicas_statuses:
+                # Federation webhook does not ask for actual 0 availability, this works now.
+                if replicas == 0:
                     return
+
                 available = max(
                     int(item.get("available") or 0) for item in replicas_statuses
                 )
@@ -308,13 +313,16 @@ class OctagramRuntime(RuntimeBase):
                 ):
                     # If explected replica is 0, we need to wait for available to become 0,
                     # otherwise we need to wait for available to become >= replicas.
+                    # Note: replicas == 0 and available == 0 is here to maintain logic correctness.
                     return
             if asyncio.get_running_loop().time() >= deadline:
                 raise BatchJobError(
-                    code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
+                    code=BatchJobErrorCode.RESOURCE_CREATION_ERROR
+                    if replicas > 0
+                    else BatchJobErrorCode.RESOURCE_DELETION_ERROR,
                     message=(
                         f"Timed out waiting for octagram workload '{workload_name}' "
-                        "to become ready"
+                        f"to become ready and replica count {replicas}"
                     ),
                 )
             await asyncio.sleep(1)
@@ -348,6 +356,10 @@ class OctagramRuntime(RuntimeBase):
                             f"({ex.response.status_code}): {ex.response.text}"
                         ),
                     ) from ex
+                # Federation have webhook blocks non-zero replica workload deletion, error msg:
+                # Error from server: admission webhook "scalabledeletion.kubeguardian.byted.org" denied the request:
+                # object's replicas is 1, not safe to delete, please scale to zero before deletion
+                # We try _scale_workload_to_zero first.
                 await self._scale_workload_to_zero(handle, ex)
                 continue
 
@@ -450,36 +462,72 @@ class OctagramRuntime(RuntimeBase):
         )
 
     async def _octagram_request(
-        self, method: str, url: str, **kwargs: Any
+        self,
+        method: str,
+        url: str,
+        *,
+        response_log_fields: Optional[list[str]] = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
-        logger.info(
-            "octagram request",
-            method=method,
-            url=url,
-            body=kwargs.get("json"),
-        )  # type: ignore[call-arg]
-        if (
-            self._httpx_client_wrapper is not None
-            and self._httpx_client_wrapper.async_client is not None
-        ):
-            response = await self._httpx_client_wrapper.async_client.request(
-                method, url, **kwargs
+        response: Optional[httpx.Response] = None
+        payload: Optional[dict[str, Any]] = None
+        error: Optional[Exception] = None
+        if response_log_fields is None:
+            response_log_fields = (
+                ["status.phase", "status.replicasStatuses"]
+                if method.upper() == "GET"
+                else []
             )
-        else:
-            async with httpx.AsyncClient() as client:
-                response = await client.request(method, url, **kwargs)
         try:
+            if (
+                self._httpx_client_wrapper is not None
+                and self._httpx_client_wrapper.async_client is not None
+            ):
+                response = await self._httpx_client_wrapper.async_client.request(
+                    method, url, **kwargs
+                )
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.request(method, url, **kwargs)
+
             response.raise_for_status()
-        except httpx.HTTPStatusError:
-            logger.error(
-                "octagram request failed",
-                method=method,
-                url=url,
-                status_code=response.status_code,
-                body=response.text,
-            )  # type: ignore[call-arg]
+            payload = response.json()
+        except Exception as ex:
+            error = ex
             raise
-        return response.json()
+        finally:
+            log_data: dict[str, Any] = {
+                "method": method,
+                "url": url,
+                "status_code": response.status_code if response is not None else None,
+            }
+            if response is not None:
+                if payload is None:
+                    try:
+                        parsed = response.json()
+                        if isinstance(parsed, dict):
+                            payload = parsed
+                    except ValueError:
+                        payload = None
+            payload_data: dict[str, Any] = {}
+            if payload is not None:
+                unwrapped_payload = self._unwrap_octagram_data(payload)
+                if isinstance(unwrapped_payload, dict):
+                    payload_data = unwrapped_payload
+
+            for field in response_log_fields:
+                log_data[field.rsplit(".", 1)[-1]] = self._get_response_log_field(
+                    payload_data, field
+                )
+
+            if error is None:
+                logger.info("octagram response", **log_data)  # type: ignore[call-arg]
+            else:
+                log_data["error"] = str(error)
+                if response is not None:
+                    log_data["response_text"] = response.text
+                logger.error("octagram response", **log_data)  # type: ignore[call-arg]
+        return payload or {}
 
     @staticmethod
     def _unwrap_octagram_data(response: dict[str, Any]) -> dict[str, Any]:
@@ -487,6 +535,17 @@ class OctagramRuntime(RuntimeBase):
         if isinstance(data, dict):
             return data
         return response
+
+    @staticmethod
+    def _get_response_log_field(
+        payload_data: dict[str, Any], field_path: str
+    ) -> Any:
+        current: Any = payload_data
+        for part in field_path.split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+        return current
 
 
 register_runtime(
