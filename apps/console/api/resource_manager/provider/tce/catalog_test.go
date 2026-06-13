@@ -21,8 +21,8 @@ import (
 	"testing"
 
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/catalog"
-	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/utils"
+	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
 )
 
 func TestTCECatalog_ListRegions(t *testing.T) {

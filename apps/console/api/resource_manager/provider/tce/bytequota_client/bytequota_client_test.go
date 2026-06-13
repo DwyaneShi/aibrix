@@ -46,7 +46,7 @@ func TestListResourcePools(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("print response", func(t *testing.T) {
-		start := time.Now()
+		start := time.Now().UTC()
 		psm := "inf.aibrix.platform"
 		platform := "Compute"
 		query := &resource_pool_types.ListResourcePoolsRequest{
@@ -71,7 +71,7 @@ func TestGetBusinessLineInfo(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("print response", func(t *testing.T) {
-		start := time.Now()
+		start := time.Now().UTC()
 		psm := "inf.aibrix.platform"
 		platform := "Compute"
 		resp, err := client.GetBusinessLineInfo(ctx, psm, platform)

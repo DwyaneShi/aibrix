@@ -152,7 +152,7 @@ func TestTCEProvisioner_ProvisionListRelease(t *testing.T) {
 								LogicalCluster:  &logicalCluster,
 							},
 							TimeWindow: scheduled_plan_types.TimeWindow{
-								StartTime: time.Now(),
+								StartTime: time.Now().UTC(),
 							},
 						},
 					},

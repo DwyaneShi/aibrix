@@ -73,7 +73,7 @@ func (p *tceMockProvisioner) Provision(ctx context.Context, req *types.ResourceP
 		return nil, fmt.Errorf("get provision by idempotency key: %w", err)
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	result := &types.ProvisionResult{
 		ProvisionID:    uuid.New().String(),
 		IdempotencyKey: req.IdempotencyKey,

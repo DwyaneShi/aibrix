@@ -106,7 +106,7 @@ func (c *tceCatalog) ListRegions(ctx context.Context) ([]types.RegionSpec, error
 	// Update cache
 	c.regionsCacheMutex.Lock()
 	c.regionsCache = regions
-	c.regionsCacheTime = time.Now()
+	c.regionsCacheTime = time.Now().UTC()
 	c.regionsCacheMutex.Unlock()
 
 	return regions, nil
@@ -168,9 +168,22 @@ func (c *tceCatalog) ListInstanceTypes(ctx context.Context, region *types.Region
 //		  "provider":"tce"
 //		}
 func (c *tceCatalog) ListResources(ctx context.Context, opts *catalog.ResourceListOptions) ([]catalog.Resource, error) {
-	req := &scheduled_plan_types.QuotaViewReq{
-		StartTime: time.Now().Truncate(time.Hour),
-		EndTime:   time.Now().Truncate(time.Hour).Add(time.Hour),
+	req := &scheduled_plan_types.QuotaViewReq{}
+
+	if opts != nil && opts.StartTime == nil {
+		req.StartTime = opts.StartTime.UTC().Truncate(time.Hour)
+	} else {
+		req.StartTime = time.Now().UTC().Truncate(time.Hour)
+	}
+
+	if opts != nil && opts.EndTime != nil {
+		req.EndTime = opts.EndTime.UTC().Truncate(time.Hour)
+	} else {
+		req.EndTime = req.StartTime.Add(time.Hour)
+	}
+
+	if req.EndTime.Before(req.StartTime) {
+		return nil, fmt.Errorf("end time must be after start time")
 	}
 
 	if opts != nil && opts.Region.TCE != nil {

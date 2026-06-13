@@ -126,7 +126,7 @@ func (p *tceProvisioner) Provision(ctx context.Context, req *types.ResourceProvi
 	matchOrderUrl := fmt.Sprintf("%s/%s", p.clientset.RegionConfig.ScheduledMatchFE, matchingResult.MatchId)
 	klog.Infof("detailed matching log %s", matchOrderUrl)
 
-	now := time.Now()
+	now := time.Now().UTC()
 	result := &types.ProvisionResult{
 		ProvisionID:    provisionID,
 		IdempotencyKey: req.IdempotencyKey,

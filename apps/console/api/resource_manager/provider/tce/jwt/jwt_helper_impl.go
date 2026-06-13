@@ -64,7 +64,7 @@ func (j *jwtHelperImpl) GenJwtToken(ctx context.Context) (string, error) {
 	_ = ctx
 
 	j.mutex.RLock()
-	if j.jwtToken != "" && time.Now().Before(j.expiresAt) {
+	if j.jwtToken != "" && time.Now().UTC().Before(j.expiresAt) {
 		token := j.jwtToken
 		j.mutex.RUnlock()
 		return token, nil
@@ -73,7 +73,7 @@ func (j *jwtHelperImpl) GenJwtToken(ctx context.Context) (string, error) {
 
 	j.mutex.Lock()
 	defer j.mutex.Unlock()
-	if j.jwtToken != "" && time.Now().Before(j.expiresAt) {
+	if j.jwtToken != "" && time.Now().UTC().Before(j.expiresAt) {
 		return j.jwtToken, nil
 	}
 
@@ -82,7 +82,7 @@ func (j *jwtHelperImpl) GenJwtToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	j.jwtToken = token
-	j.expiresAt = time.Now().Add(tokenCacheDuration)
+	j.expiresAt = time.Now().UTC().Add(tokenCacheDuration)
 	return token, nil
 }
 

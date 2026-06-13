@@ -275,7 +275,7 @@ func (i *MatchingIntent) Validate() ([]string, error) {
 		return warnings, fmt.Errorf(".timeWindow.endTime is required")
 	}
 
-	minTime := time.Now().Add(-time.Hour)
+	minTime := time.Now().UTC().Add(-time.Hour)
 	if i.TimeWindow.StartTime.Before(minTime) {
 		return warnings, fmt.Errorf(".timeWindow.startTime must after %v", minTime)
 	}
@@ -284,7 +284,7 @@ func (i *MatchingIntent) Validate() ([]string, error) {
 		return warnings, fmt.Errorf(".timeWindow.endTime must after %v", minTime)
 	}
 
-	maxTime := time.Now().Add(time.Hour * 24 * 30)
+	maxTime := time.Now().UTC().Add(time.Hour * 24 * 30)
 	if i.TimeWindow.StartTime.After(maxTime) {
 		return warnings, fmt.Errorf(".timeWindow.startTime must before %v", maxTime)
 	}

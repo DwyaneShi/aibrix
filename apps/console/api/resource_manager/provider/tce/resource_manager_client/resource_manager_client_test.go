@@ -46,7 +46,7 @@ func TestListScheduledMatch(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("print response", func(t *testing.T) {
-		start := time.Now()
+		start := time.Now().UTC()
 		resp, err := client.ListScheduledMatch(ctx, nil)
 		if err != nil {
 			t.Fatalf("ListScheduledMatch failed: %v", err)
@@ -61,7 +61,7 @@ func TestGetStatistics(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("print response", func(t *testing.T) {
-		start := time.Now()
+		start := time.Now().UTC()
 		resp, err := client.GetStatistics(ctx, nil)
 		if err != nil {
 			t.Fatalf("GetStatistics failed: %v", err)
@@ -76,7 +76,7 @@ func TestGetSupplyDomains(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("print response", func(t *testing.T) {
-		start := time.Now()
+		start := time.Now().UTC()
 		platform := "Compute"
 		detail := true
 		convertUnit := true
