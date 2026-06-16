@@ -128,32 +128,12 @@ def create_storage(
         )
 
     elif storage_type == StorageType.REDIS:
-        db = kwargs.get("db", 0) or envs.STORAGE_REDIS_DB
-        redis_psm = kwargs.get("redis_psm") or getattr(envs, "STORAGE_REDIS_PSM", None)
-
-        if redis_psm:
-            from aibrix.storage.byteredis import RedisStorage as _BytedRedisStorage
-
-            return _BytedRedisStorage(redis_psm, db=db, config=config)
-
         from aibrix.storage.redis import RedisStorage
 
-        host = (
-            kwargs.get("host")
-            or getattr(envs, "STORAGE_REDIS_HOST", None)
-            or "localhost"
-        )
-        port = kwargs.get("port") or getattr(envs, "STORAGE_REDIS_PORT", None) or 6379
-        password = kwargs.get("password") or getattr(
-            envs, "STORAGE_REDIS_PASSWORD", None
-        )
-        return RedisStorage(
-            config=config,
-            host=host,
-            port=port,
-            db=db,
-            password=password,
-        )
+        allowed = {"host", "port", "db", "password", "redis_psm", "require_check", "test"}
+        client_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+
+        return RedisStorage(config=config, **client_kwargs)
 
     else:
         raise ValueError(f"Unsupported storage type: {storage_type}")

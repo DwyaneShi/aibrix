@@ -198,7 +198,38 @@ async def run_pipeline(
     return await pipeline.execute()
 
 
-def get_redis_client(require_check: bool = False, **kwargs) -> AsyncRedis:
+def get_redis_client(
+    require_check: bool = False, test: bool = False, **kwargs
+) -> AsyncRedis:
+    resolved_redis_psm = kwargs.get("redis_psm") or envs.STORAGE_REDIS_PSM
+    resolved_db = (
+        cast(int, kwargs.get("db"))
+        if kwargs.get("db") is not None
+        else envs.STORAGE_REDIS_DB
+    )
+    if resolved_redis_psm:
+        from aibrix.client.internal.byteredis import _AsyncBytedRedisClient
+
+        logger.info(  # type: ignore[call-arg]
+            "Creating BytedRedis client",
+            redis_psm=resolved_redis_psm,
+            db=resolved_db,
+            test=test,
+            require_check=require_check,
+            extra_kwargs=sorted(
+                key
+                for key in kwargs
+                if key not in {"redis_psm", "host", "port", "db", "password"}
+            ),
+        )
+        timeout = 30.0 if test else None
+        return _AsyncBytedRedisClient(
+            redis_psm=resolved_redis_psm,
+            db=resolved_db,
+            socket_timeout=timeout,
+            socket_connect_timeout=timeout,
+        )
+
     import redis.asyncio as redis
 
     resolved_host = _require_setting(
@@ -208,11 +239,6 @@ def get_redis_client(require_check: bool = False, **kwargs) -> AsyncRedis:
         or (None if require_check else "localhost"),
     )
     resolved_port = kwargs.get("port") or envs.STORAGE_REDIS_PORT
-    resolved_db = (
-        cast(int, kwargs.get("db"))
-        if kwargs.get("db") is not None
-        else envs.STORAGE_REDIS_DB
-    )
     resolved_password = kwargs.get("password") or envs.STORAGE_REDIS_PASSWORD
     logger.info(  # type: ignore[call-arg]
         "Creating Redis client",

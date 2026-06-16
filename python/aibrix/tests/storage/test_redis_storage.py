@@ -47,7 +47,7 @@ def _test_redis_connectivity():
         def test_connection():
             async def ping():
                 # Try to connect to Redis with a short timeout.
-                client = redis_client.get_redis_client()
+                client = redis_client.get_redis_client(test=True)
                 try:
                     # Test with a simple ping against the async client.
                     return await client.ping()
@@ -60,30 +60,52 @@ def _test_redis_connectivity():
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(test_connection)
             try:
-                return future.result(timeout=5)  # 5 second timeout
-            except FutureTimeoutError:
-                return False
-            except Exception:
-                return False
+                ping_result = future.result(timeout=10)
+                if not ping_result:
+                    return (
+                        False,
+                        RuntimeError(
+                            f"Redis ping returned unexpected falsy result: {ping_result!r}"
+                        ),
+                    )
+                return True, None
+            except FutureTimeoutError as fte:
+                return False, RuntimeError(
+                    f"Redis connectivity check timed out after 10 seconds ({type(fte).__name__})"
+                )
+            except Exception as e:
+                return False, e
 
-    except ImportError:
+    except ImportError as ie:
         # redis package not available
-        return False
-    except Exception:
-        return False
+        return False, ie
+    except Exception as e:
+        return False, e
+
+
+def _format_redis_connectivity_error(ex) -> str:
+    if ex is None:
+        return "unknown reason"
+    detail = str(ex).strip()
+    if detail:
+        return detail
+    return type(ex).__name__
 
 
 # Test Redis accessibility
-redis_available = _test_redis_connectivity()
+redis_available, ex = _test_redis_connectivity()
 requires_redis = pytest.mark.skipif(
     not redis_available,
-    reason="Redis not accessible - ensure Redis is running on localhost:6379 or set REDIS_HOST environment variable",
+    reason=(
+        "Redis not accessible - ensure Redis is running on localhost:6379 "
+        f"or set REDIS_HOST environment variable: {_format_redis_connectivity_error(ex)}"
+    ),
 )
 
 
 def get_redis_storage(**kwargs):
     """Helper to create Redis storage with environment-based configuration."""
-    return create_storage(StorageType.REDIS, **kwargs)
+    return create_storage(StorageType.REDIS, test=True, **kwargs)
 
 
 def _build_upgrade_fake() -> FakeRedisClient:
