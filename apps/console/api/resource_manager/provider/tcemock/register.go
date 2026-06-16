@@ -17,6 +17,7 @@ limitations under the License.
 package tcemock
 
 import (
+	"github.com/vllm-project/aibrix/apps/console/api/error_injection"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/catalog"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provisioner"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
@@ -28,7 +29,7 @@ import (
 // deployments where the real TCE control plane is unreachable. The mock
 // holds no external credentials, so registration always succeeds.
 func init() {
-	provisioner.Register(types.ResourceProvisionTypeTCEMock, func(s store.Store) (provisioner.Provisioner, error) {
+	provisioner.Register(types.ResourceProvisionTypeTCEMock, func(s store.Store, _ error_injection.Injector) (provisioner.Provisioner, error) {
 		return newProvisioner(s)
 	})
 	catalog.Register(types.ResourceProvisionTypeTCEMock, func() (catalog.Catalog, error) {

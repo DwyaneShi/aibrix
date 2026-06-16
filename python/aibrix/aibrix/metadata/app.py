@@ -26,6 +26,7 @@ from kubernetes import client as k8s_client
 from kubernetes import config
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from aibrix import envs
 from aibrix.batch import BatchDriver
 from aibrix.batch.client import (
     EndpointSource,
@@ -45,7 +46,6 @@ from aibrix.metadata.core.metrics import (
     shutdown_metrics,
 )
 from aibrix.metadata.setting import settings
-from aibrix.metadata.store import RedisMetadataStore
 from aibrix.storage import create_storage
 from aibrix.storage.redis_upgrade import maybe_upgrade_storage
 
@@ -185,7 +185,20 @@ async def lifespan(app: FastAPI):
     # Initialize metadata store (abstraction over Redis) only if not already set
     # (e.g., tests may pre-configure a mock store before lifespan runs)
     if not hasattr(app.state, "metadata_store") or app.state.metadata_store is None:
-        metadata_store = RedisMetadataStore()
+        redis_psm = getattr(envs, "STORAGE_REDIS_PSM", None)
+        if redis_psm:
+            from aibrix.metadata.byted_store import (
+                RedisMetadataStore as _BytedRedisMetadataStore,
+            )
+
+            metadata_store: Any = _BytedRedisMetadataStore(
+                redis_psm, db=envs.STORAGE_REDIS_DB
+            )
+        else:
+            from aibrix.metadata.store import RedisMetadataStore
+
+            metadata_store = RedisMetadataStore()
+            
         app.state.metadata_store = metadata_store
         # Backward compatibility: expose underlying Redis client for components
         # that haven't migrated to the MetadataStore interface yet
