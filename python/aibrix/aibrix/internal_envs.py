@@ -37,6 +37,7 @@ REGION = os.getenv("REGION", "CN")
 # BytedRedis (PSM-based) storage / metadata. Overrides the public REDIS_HOST path.
 STORAGE_REDIS_DB = int(os.environ.get("BYTEDREDIS_DB", os.environ.get("REDIS_DB", "0")))
 STORAGE_REDIS_PSM = os.getenv("BYTEDREDIS_PSM")
+STORAGE_REDIS_AVAILABLE = STORAGE_REDIS_PSM is not None
 STORAGE_REDIS_DISABLE_AUTH = _is_true(os.getenv("BYTEDREDIS_DISABLE_AUTH", "0"))
 STORAGE_REDIS_DISABLE_METRICS = _is_true(os.getenv("BYTEDREDIS_DISABLE_METRICS", "0"))
 STORAGE_REDIS_SOCKET_TIMEOUT = float(os.getenv("BYTEDREDIS_SOCKET_TIMEOUT", 0.05))
