@@ -170,7 +170,7 @@ func (c *tceCatalog) ListInstanceTypes(ctx context.Context, region *types.Region
 func (c *tceCatalog) ListResources(ctx context.Context, opts *catalog.ResourceListOptions) ([]catalog.Resource, error) {
 	req := &scheduled_plan_types.QuotaViewReq{}
 
-	if opts != nil && opts.StartTime == nil {
+	if opts != nil && opts.StartTime != nil {
 		req.StartTime = opts.StartTime.UTC().Truncate(time.Hour)
 	} else {
 		req.StartTime = time.Now().UTC().Truncate(time.Hour)
