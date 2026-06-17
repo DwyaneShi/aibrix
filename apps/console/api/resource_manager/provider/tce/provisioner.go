@@ -230,9 +230,6 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 			if err != nil || matchingResult == nil {
 				continue
 			}
-			if matchingResult.Explanation != nil {
-				result.ErrorMessage = *matchingResult.Explanation
-			}
 			if matchingResult.Status == scheduled_plan_types.MatchingResultStatusSuccess || matchingResult.Status == scheduled_plan_types.MatchingResultStatusPartial {
 				result.Status = types.ProvisionStatusRunning
 				result.TCE.GroupResults = toTCEGroupResults(matchingResult.GroupResults)
@@ -273,6 +270,7 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 				var failedReason string
 				if matchingResult.Explanation != nil {
 					failedReason = *matchingResult.Explanation
+					result.ErrorMessage = *matchingResult.Explanation
 				} else {
 					failedReason = "unknown"
 				}
