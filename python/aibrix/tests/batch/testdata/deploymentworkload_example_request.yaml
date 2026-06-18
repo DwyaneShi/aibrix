@@ -591,10 +591,14 @@ spec:
                   maxReplica: 1
                   minReplica: 1
                   resourcePercentage:
+                    cpu: 1
                     gpu: 1
+                    memory: 1
                 - maxReplica: 0
                   minReplica: 0
                   resourcePercentage:
+                    cpu: 1
                     gpu: 1
+                    memory: 1
         status: {}
       type: PostTreatment

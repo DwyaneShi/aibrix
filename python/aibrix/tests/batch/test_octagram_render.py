@@ -242,6 +242,7 @@ def test_octagram_manifest_renderer_renders_expected_tce_fields():
         },
     }
 
+
 def test_octagram_manifest_renderer_uses_workload_psm_for_log_host_paths():
     rendered = _render(spec=_spec())
     volumes = rendered["spec"]["podBase"]["volumes"]
@@ -294,20 +295,81 @@ def test_octagram_manifest_renderer_clamps_window_to_resource_allocation_deadlin
     assert rules[1] == {
         "maxReplica": 0,
         "minReplica": 0,
-        "resourcePercentage": {"gpu": 1},
+        "resourcePercentage": {"gpu": 1, "cpu": 1, "memory": 1},
     }
+
+
+def test_octagram_manifest_renderer_maps_xpu_category_to_xpu_annotation():
+    rendered = _render(
+        detail=_resource_detail(
+            accelerator_type="BI-XPU",
+            accelerator_category="xpu",
+            accelerator_count=2,
+        )
+    )
+
+    deployment_annotations = rendered["spec"]["deploymentMeta"]["annotations"]
+    resources = rendered["spec"]["podBase"]["containers"][0]["resources"]
+    rules = rendered["spec"]["treatments"][1]["data"]["spec"]["hpaExtensionConfig"][
+        "resourceUtilizationConfig"
+    ]["rules"]
+
+    assert "deployment.tce.kubernetes.io/gpu-type" not in deployment_annotations
+    assert deployment_annotations["deployment.tce.kubernetes.io/xpu-type"] == "BI-XPU"
+    assert resources["xpu"] == {"request": "2", "limit": "2"}
+    assert rules[0]["resourcePercentage"] == {"xpu": 1, "cpu": 1, "memory": 1}
+    assert rules[1]["resourcePercentage"] == {"xpu": 1, "cpu": 1, "memory": 1}
+
+
+def test_octagram_manifest_renderer_maps_npu_category_to_habana_annotation():
+    rendered = _render(
+        detail=_resource_detail(
+            accelerator_type="HL-325",
+            accelerator_category="npu",
+        )
+    )
+
+    deployment_annotations = rendered["spec"]["deploymentMeta"]["annotations"]
+    resources = rendered["spec"]["podBase"]["containers"][0]["resources"]
+    rules = rendered["spec"]["treatments"][1]["data"]["spec"]["hpaExtensionConfig"][
+        "resourceUtilizationConfig"
+    ]["rules"]
+
+    assert "deployment.tce.kubernetes.io/gpu-type" not in deployment_annotations
+    assert (
+        deployment_annotations["deployment.tce.kubernetes.io/habana-type"] == "HL-325"
+    )
+    assert resources["npu"] == {"request": "1", "limit": "1"}
+    assert rules[0]["resourcePercentage"] == {"npu": 1, "cpu": 1, "memory": 1}
+    assert rules[1]["resourcePercentage"] == {"npu": 1, "cpu": 1, "memory": 1}
+
+
+def test_octagram_manifest_renderer_includes_cpu_and_memory_in_hpa_resource_percentage():
+    rendered = _render(detail=_resource_detail(accelerator_count=4, replica=3))
+
+    rules = rendered["spec"]["treatments"][1]["data"]["spec"]["hpaExtensionConfig"][
+        "resourceUtilizationConfig"
+    ]["rules"]
+
+    assert rules[0]["maxReplica"] == 3
+    assert rules[0]["minReplica"] == 3
+    assert rules[0]["resourcePercentage"] == {"gpu": 1, "cpu": 1, "memory": 1}
+    assert rules[1]["resourcePercentage"] == {"gpu": 1, "cpu": 1, "memory": 1}
 
 
 def test_octagram_manifest_renderer_omits_empty_cpu_and_memory_fields():
     rendered = _render(
         job_id="6281d2a8-6281ds2a8-a2",
         spec=_spec(),
-        detail=_resource_detail(cpu=None, memory=None),
+        detail=_resource_detail(cpu=None, memory=None, accelerator_count=0),
     )
 
     deployment_annotations = rendered["spec"]["deploymentMeta"]["annotations"]
     pod_annotations = rendered["spec"]["podBase"]["annotations"]
     resources = rendered["spec"]["podBase"]["containers"][0]["resources"]
+    rules = rendered["spec"]["treatments"][1]["data"]["spec"]["hpaExtensionConfig"][
+        "resourceUtilizationConfig"
+    ]["rules"]
 
     assert (
         "deployment.tce.kubernetes.io/requestCpuUserDemand"
@@ -321,6 +383,8 @@ def test_octagram_manifest_renderer_omits_empty_cpu_and_memory_fields():
     assert "pod.tce.kubernetes.io/requestMemUserDemand" not in pod_annotations
     assert "cpu" not in resources
     assert "memory" not in resources
+    assert rules[0]["resourcePercentage"] == {"gpu": 1}
+    assert rules[1]["resourcePercentage"] == {"gpu": 1}
 
 
 def test_octagram_manifest_renderer_adds_scheduled_feature_gate_conditionally():

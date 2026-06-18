@@ -7,12 +7,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from aibrix import envs
 from aibrix.batch.job_entity import BatchJobSpec, ResourceDetail, ResourceRequirement
+from aibrix.batch.manifest.engine_adapter import build_engine_args
+from aibrix.batch.manifest.renderer import _RendererSupport
 from aibrix.batch.template import ModelDeploymentTemplate
 from aibrix.downloader.utils import infer_model_name
 from aibrix.logger import init_logger
-
-from aibrix.batch.manifest.engine_adapter import build_engine_args
-from aibrix.batch.manifest.renderer import _RendererSupport
 
 logger = init_logger(__name__)
 
@@ -36,6 +35,20 @@ def _map_accelerator_type(accelerator_type: Optional[str]) -> str:
     if not accelerator_type:
         return ""
     return _OCTAGRAM_ACCELERATOR_TYPE_MAPPING.get(accelerator_type, accelerator_type)
+
+
+def _accelerator_category(resource: ResourceRequirement) -> str:
+    return (resource.accelerator_category or "gpu").lower()
+
+
+def _deployment_accelerator_type_annotation(resource: ResourceRequirement) -> str:
+    category = _accelerator_category(resource)
+    if category == "xpu":
+        return "deployment.tce.kubernetes.io/xpu-type"
+    if category == "npu":
+        # Octagram uses habana-type for NPU-class accelerators.
+        return "deployment.tce.kubernetes.io/habana-type"
+    return "deployment.tce.kubernetes.io/gpu-type"
 
 
 _BASE_FEATURE_GATES = [
@@ -171,11 +184,7 @@ def _volumes(psm: Optional[str]) -> List[Dict[str, Any]]:
         {"name": "var-log-tiger", "hostPath": _log_host_path(psm)},
     ]
     insert_at = next(
-        (
-            index
-            for index, volume in enumerate(volumes)
-            if volume["name"] == "pyutil"
-        ),
+        (index for index, volume in enumerate(volumes) if volume["name"] == "pyutil"),
         len(volumes),
     )
     volumes[insert_at:insert_at] = log_volumes
@@ -332,7 +341,7 @@ class OctagramManifestRenderer(_RendererSupport):
     ) -> None:
         annotations = {
             "bytedance.quota.salemode": detail.salemode or "",
-            "deployment.tce.kubernetes.io/gpu-type": _map_accelerator_type(
+            _deployment_accelerator_type_annotation(resource): _map_accelerator_type(
                 resource.accelerator_type
             ),
             "deployment.tce.kubernetes.io/requestGpuUserDemand": str(
@@ -556,7 +565,9 @@ class OctagramManifestRenderer(_RendererSupport):
         if window_end is None:
             return None
 
-        resource_metric = self._resolve_hpa_metric(resource)
+        # Octagram only materializes resourceUtilization rules when a metric
+        # target is present, even if fixed min/max replicas drive the behavior.
+        resource_percentage = self._build_hpa_resource_percentage(resource)
         active_replicas = resource.replica or 1
         rules: List[Dict[str, Any]] = []
 
@@ -573,7 +584,7 @@ class OctagramManifestRenderer(_RendererSupport):
                     },
                     "maxReplica": active_replicas,
                     "minReplica": active_replicas,
-                    "resourcePercentage": {resource_metric: 1},
+                    "resourcePercentage": resource_percentage,
                 }
             )
 
@@ -581,7 +592,7 @@ class OctagramManifestRenderer(_RendererSupport):
             {
                 "maxReplica": 0,
                 "minReplica": 0,
-                "resourcePercentage": {resource_metric: 1},
+                "resourcePercentage": resource_percentage,
             }
         )
 
@@ -630,8 +641,19 @@ class OctagramManifestRenderer(_RendererSupport):
         return current.astimezone(timezone.utc)
 
     @staticmethod
+    def _build_hpa_resource_percentage(
+        resource: ResourceRequirement,
+    ) -> Dict[str, int]:
+        metrics = {OctagramManifestRenderer._resolve_hpa_metric(resource): 1}
+        if resource.cpu:
+            metrics["cpu"] = 1
+        if resource.memory:
+            metrics["memory"] = 1
+        return metrics
+
+    @staticmethod
     def _resolve_hpa_metric(resource: ResourceRequirement) -> str:
-        metric = (resource.accelerator_category or "gpu").lower()
+        metric = _accelerator_category(resource)
         if metric in {"cpu", "memory", "gpu", "npu", "xpu"}:
             return metric
         return "gpu"
@@ -684,7 +706,7 @@ class OctagramManifestRenderer(_RendererSupport):
     def _container_resources(
         self, resource: ResourceRequirement
     ) -> Dict[str, Dict[str, str]]:
-        accelerator_key = (resource.accelerator_category or "gpu").lower()
+        accelerator_key = _accelerator_category(resource)
         accelerator_count = str(resource.accelerator_count or 0)
         resources = {
             accelerator_key: {

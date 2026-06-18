@@ -537,9 +537,7 @@ class OctagramRuntime(RuntimeBase):
         return response
 
     @staticmethod
-    def _get_response_log_field(
-        payload_data: dict[str, Any], field_path: str
-    ) -> Any:
+    def _get_response_log_field(payload_data: dict[str, Any], field_path: str) -> Any:
         current: Any = payload_data
         for part in field_path.split("."):
             if not isinstance(current, dict):
