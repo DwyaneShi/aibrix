@@ -70,9 +70,10 @@ func (b *tceMockBackend) Schedule(ctx context.Context, req *plannerapi.EnqueueRe
 }
 
 func (b *tceMockBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult) plannerclient.ResourceAllocation {
-	allocation := buildTCEResourceAllocation(prov)
+	replicas := replicasFromProvisionSpec(spec)
+	allocation := buildTCEResourceAllocation(prov, replicas)
 	if len(allocation.ResourceDetails) > 0 && len(allocation.ResourceDetails[0].Resources) > 0 {
-		applyTCEDemoOverrides(&allocation.ResourceDetails[0], &allocation.ResourceDetails[0].Resources[0])
+		applyTCEDemoOverrides(&allocation.ResourceDetails[0], &allocation.ResourceDetails[0].Resources[0], replicas)
 	} else {
 		// Resources may have been omitted when buildTCEResourceAllocation saw no
 		// accelerator request; demo mode always wants a populated entry.
@@ -82,7 +83,7 @@ func (b *tceMockBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionS
 			}}
 		}
 		resource := plannerclient.ResourceItem{Name: defaultRoleName}
-		applyTCEDemoOverrides(&allocation.ResourceDetails[0], &resource)
+		applyTCEDemoOverrides(&allocation.ResourceDetails[0], &resource, replicas)
 		allocation.ResourceDetails[0].Resources = []plannerclient.ResourceItem{resource}
 	}
 	if spec.TimeWindow != nil && spec.TimeWindow.EndTime != nil {
@@ -102,18 +103,21 @@ func (b *tceMockBackend) BuildRuntime(req *plannerapi.EnqueueRequest, prov *rmty
 
 // applyTCEDemoOverrides fills the MDS submission fields with hardcoded demo
 // values. Edit them in place to point the demo at a different cluster/pool.
-func applyTCEDemoOverrides(details *plannerclient.ResourceDetails, resource *plannerclient.ResourceItem) {
+func applyTCEDemoOverrides(details *plannerclient.ResourceDetails, resource *plannerclient.ResourceItem, replicas int) {
+	if replicas <= 0 {
+		replicas = defaultJobReplicas
+	}
 	details.SaleMode = "reserved"
 	details.QoSLevel = "shared_cores"
 	details.EndpointCluster = "Echo-HL"
 	details.LogicalCluster = "ai"
 	details.ResourcePoolName = "compute-3530-hl-echo-ai-default"
 	details.GpuType = "NVIDIA-H20"
-	details.Replica = 1
+	details.Replica = replicas
 
 	resource.Name = defaultRoleName
 	resource.AcceleratorType = "NVIDIA-H20"
 	resource.AcceleratorCategory = "gpu"
 	resource.AcceleratorCount = 1
-	resource.Replica = 1
+	resource.Replica = replicas
 }

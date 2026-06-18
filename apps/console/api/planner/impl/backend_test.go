@@ -106,6 +106,48 @@ func TestDefaultPlannerBackendBuildResourceAllocationIncludesReplicas(t *testing
 	}
 }
 
+func TestBuildTCEResourceAllocationFallsBackToRequestedReplicas(t *testing.T) {
+	count := 1
+	groupResults := rmtypes.TCEGroupResults{
+		{
+			AllocationSegments: []rmtypes.TCEAllocationSegment{
+				{
+					AcceleratorType:     "NVIDIA-L20",
+					AcceleratorCategory: "gpu",
+					Count:               &count,
+				},
+			},
+		},
+	}
+	spec := rmtypes.ResourceProvisionSpec{
+		Groups: &[]rmtypes.ResourceGroupSpec{
+			{Replicas: ptr.To(4)},
+		},
+	}
+	allocation := buildTCEResourceAllocation(&rmtypes.ProvisionResult{
+		ProvisionID: "prov-1",
+		ExtensionProvisionResultDetails: rmtypes.ExtensionProvisionResultDetails{
+			TCE: &rmtypes.TCEProvisionDetail{
+				GroupResults: &groupResults,
+			},
+		},
+	}, replicasFromProvisionSpec(spec))
+
+	if len(allocation.ResourceDetails) != 1 {
+		t.Fatalf("resource details len = %d, want 1", len(allocation.ResourceDetails))
+	}
+	detail := allocation.ResourceDetails[0]
+	if detail.Replica != 4 {
+		t.Fatalf("outer replica = %d, want 4", detail.Replica)
+	}
+	if len(detail.Resources) != 1 {
+		t.Fatalf("resources len = %d, want 1", len(detail.Resources))
+	}
+	if detail.Resources[0].Replica != 4 {
+		t.Fatalf("inner replica = %d, want 4", detail.Resources[0].Replica)
+	}
+}
+
 func TestDefaultPlannerBackendBuildRuntimeUsesTemplateEngine(t *testing.T) {
 	backend := &defaultPlannerBackend{provider: rmtypes.ResourceProvisionTypeLambdaCloud}
 	rt, err := backend.BuildRuntime(&plannerapi.EnqueueRequest{

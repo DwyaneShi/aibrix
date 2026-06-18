@@ -31,9 +31,12 @@ const defaultRoleName = "default"
 
 // buildTCEResourceAllocation projects a TCE ProvisionResult into the
 // extra_body.aibrix.resource_allocation payload. Provider-specific details are
-// mapped best-effort; missing fields are omitted. Replicas defaults to 1
-// (single-replica only today).
-func buildTCEResourceAllocation(prov *rmtypes.ProvisionResult) *plannerclient.TCEResourceAllocation {
+// mapped best-effort; missing fields are omitted. Replicas come from the RM
+// response when present, otherwise they fall back to the requested replicas.
+func buildTCEResourceAllocation(prov *rmtypes.ProvisionResult, fallbackReplicas int) *plannerclient.TCEResourceAllocation {
+	if fallbackReplicas <= 0 {
+		fallbackReplicas = defaultJobReplicas
+	}
 	allocation := &plannerclient.TCEResourceAllocation{
 		ProvisionID: prov.ProvisionID,
 	}
@@ -44,7 +47,7 @@ func buildTCEResourceAllocation(prov *rmtypes.ProvisionResult) *plannerclient.TC
 
 	resource := plannerclient.ResourceItem{
 		Name:                defaultRoleName,
-		Replica:             1,
+		Replica:             fallbackReplicas,
 		AcceleratorCategory: "gpu",
 	}
 
@@ -54,9 +57,21 @@ func buildTCEResourceAllocation(prov *rmtypes.ProvisionResult) *plannerclient.TC
 	if resource.AcceleratorType != "" || resource.AcceleratorCount != 0 {
 		details.Resources = []plannerclient.ResourceItem{resource}
 	}
+	details.Replica = resource.Replica
 
 	allocation.ResourceDetails = []plannerclient.ResourceDetails{*details}
 	return allocation
+}
+
+func replicasFromProvisionSpec(spec rmtypes.ResourceProvisionSpec) int {
+	if spec.Groups == nil || len(*spec.Groups) == 0 {
+		return defaultJobReplicas
+	}
+	replicas := (*spec.Groups)[0].Replicas
+	if replicas == nil || *replicas <= 0 {
+		return defaultJobReplicas
+	}
+	return *replicas
 }
 
 func populateTCEDetails(details *plannerclient.ResourceDetails, resource *plannerclient.ResourceItem, prov *rmtypes.ProvisionResult) {

@@ -67,7 +67,7 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 				TCE: &rmtypes.TCECredential{},
 			},
 		},
-		Groups: &[]rmtypes.ResourceGroupSpec{buildProvisionGroupPlan(gpuType, gpusPerReplica)},
+		Groups: &[]rmtypes.ResourceGroupSpec{buildProvisionGroupPlan(gpuType, gpusPerReplica, requestedReplicas(req))},
 		TimeWindow: &rmtypes.TimeWindow{
 			StartTime: startTime,
 			EndTime:   &endTime,
@@ -104,7 +104,7 @@ func (b *tcePlannerBackend) logProvisionReady(prov *rmtypes.ProvisionResult) {
 
 func (b *tcePlannerBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult) plannerclient.ResourceAllocation {
 	b.logProvisionReady(prov)
-	allocation := buildTCEResourceAllocation(prov)
+	allocation := buildTCEResourceAllocation(prov, replicasFromProvisionSpec(spec))
 	if spec.TimeWindow != nil && spec.TimeWindow.EndTime != nil {
 		allocation.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
 	}
