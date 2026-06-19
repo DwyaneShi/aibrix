@@ -16,6 +16,7 @@ import asyncio
 import json
 import mimetypes
 import os
+from dataclasses import replace
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, BinaryIO, Optional, TextIO, Union
@@ -26,17 +27,13 @@ from bytedtos import StaticCredentials
 from bytedtos.errors import TosException
 from tos.exceptions import TosClientError, TosServerError
 
-from aibrix.storage.base import (
-    BaseStorage,
-    PutObjectOptions,
-    StorageConfig,
-    StorageType,
-)
+from aibrix.storage.base import PutObjectOptions, StorageConfig, StorageType
+from aibrix.storage.base2 import BaseStorage2
 from aibrix.storage.reader import Reader
 from aibrix.storage.utils import ObjectMetadata
 
 
-class TOSStorage(BaseStorage):
+class TOSStorage(BaseStorage2):
     """TOS implementation that supports both in-house and Volcano access modes."""
 
     def __init__(
@@ -50,7 +47,12 @@ class TOSStorage(BaseStorage):
         enable_crc: bool = False,
         config: Optional[StorageConfig] = None,
     ):
-        super().__init__(config)
+        resolved_config = config or StorageConfig()
+        if resolved_config.strict_multipart_min_part_size is None:
+            resolved_config = replace(
+                resolved_config, strict_multipart_min_part_size=True
+            )
+        super().__init__(resolved_config)
         self.bucket_name = bucket_name
         self.force_volcano = force_volcano or os.getenv("PAAS_CLOUD_ENV") == "VOLCANO"
 
@@ -64,6 +66,11 @@ class TOSStorage(BaseStorage):
         try:
             kwargs: dict[str, Any] = {
                 "enable_crc64": enable_crc,
+                # bytedtos.Client uses requests' HTTPAdapter pool sizing via
+                # ``connection_pool_size`` on the non-Volcano path. VeClient
+                # currently ignores this kwarg, but passing it through keeps
+                # the config surface consistent across TOS backends.
+                "connection_pool_size": max(self.config.max_concurrency, 1),
             }
             if self.force_volcano:
                 kwargs["force_volcano"] = True
@@ -428,6 +435,7 @@ class TOSStorage(BaseStorage):
         delimiter: Optional[str],
         limit: Optional[int],
         continuation_token: Optional[str],
+        after_key: Optional[str],
     ) -> tuple[list[str], Optional[str]]:
         chosen_client = getattr(self.client, "_choose_client", lambda: None)()
         ve_sdk_client = getattr(chosen_client, "client", None)
@@ -438,7 +446,7 @@ class TOSStorage(BaseStorage):
             self.bucket_name,
             prefix=prefix,
             delimiter=delimiter or "",
-            marker=continuation_token or "",
+            marker=continuation_token or after_key or "",
             max_keys=min(limit, 1000) if limit is not None else 1000,
         )
 
@@ -573,12 +581,81 @@ class TOSStorage(BaseStorage):
 
         await asyncio.get_event_loop().run_in_executor(None, _delete_object)
 
+    async def delete_objects(self, keys: list[str]) -> None:
+        """Delete multiple objects from TOS with rolling bounded parallelism."""
+        if not keys:
+            return
+
+        # TODO: If bytedtos adds a native ``delete_multi_objects`` API, replace
+        # this rolling per-object scheduler with a backend-native bulk delete.
+        # That would reduce request count while preserving the same public API.
+        delete_concurrency = max(
+            1,
+            min(
+                self.config.multi_object_delete_limit,
+                len(keys),
+            ),
+        )
+
+        async def _delete_key(key: str) -> None:
+            try:
+                await self.delete_object(key)
+            except Exception as exc:
+                raise ValueError(f"Failed to delete object {key}") from exc
+
+        key_iter = iter(keys)
+        pending_tasks: set[asyncio.Task[None]] = set()
+
+        def _start_next_task() -> bool:
+            try:
+                key = next(key_iter)
+            except StopIteration:
+                return False
+
+            pending_tasks.add(asyncio.create_task(_delete_key(key)))
+            return True
+
+        for _ in range(delete_concurrency):
+            if not _start_next_task():
+                break
+
+        while pending_tasks:
+            # Keep the pipeline full in a rolling fashion: as soon as one delete
+            # completes, schedule the next key instead of waiting for a full
+            # chunk/barrier to finish.
+            done_tasks, still_pending = await asyncio.wait(
+                pending_tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            pending_tasks = set(still_pending)
+
+            try:
+                for task in done_tasks:
+                    exc = task.exception()
+                    if exc is not None:
+                        raise exc
+            except Exception:
+                # Match BaseStorage2's fail-fast cleanup pattern: once any
+                # delete fails, cancel sibling tasks and drain them so no
+                # background task keeps running after we re-raise.
+                for task in pending_tasks:
+                    task.cancel()
+                # Drain cancelled sibling tasks so they do not keep running or
+                # surface unhandled exceptions after we re-raise the first error.
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+                raise
+
+            for _ in range(len(done_tasks)):
+                if not _start_next_task():
+                    break
+
     async def list_objects(
         self,
         prefix: str = "",
         delimiter: Optional[str] = None,
         limit: Optional[int] = None,
         continuation_token: Optional[str] = None,
+        after_key: Optional[str] = None,
     ) -> tuple[list[str], Optional[str]]:
         """List objects with given prefix."""
 
@@ -588,7 +665,7 @@ class TOSStorage(BaseStorage):
                     response = self.client.list_prefix(
                         prefix,
                         delimiter,
-                        continuation_token or "",
+                        continuation_token or after_key or "",
                         min(limit, 1000) if limit is not None else 1000,
                     )
                     payload = self._response_payload(response)
@@ -606,6 +683,11 @@ class TOSStorage(BaseStorage):
                             offset = 0
                     else:
                         offset = 0
+                    if continuation_token is None and after_key:
+                        try:
+                            offset = objects.index(after_key) + 1
+                        except ValueError:
+                            offset = 0
                     if limit is not None:
                         paginated_objects = objects[offset : offset + limit]
                         next_token = (
@@ -619,7 +701,7 @@ class TOSStorage(BaseStorage):
                         next_token = None
             except TypeError:
                 return self._list_objects_via_volcano_client(
-                    prefix, delimiter, limit, continuation_token
+                    prefix, delimiter, limit, continuation_token, after_key
                 )
             except (TosException, TosClientError, TosServerError) as e:
                 raise ValueError(f"Failed to list objects with prefix {prefix}: {e}")

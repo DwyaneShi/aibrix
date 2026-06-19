@@ -22,7 +22,8 @@ import pytest
 
 from aibrix.storage.base import BaseStorage
 from aibrix.storage.base2 import BaseStorage2
-from aibrix.storage.tos import TOSStorage
+from aibrix.storage.factory import create_storage
+from aibrix.storage.types import StorageType
 
 _RUN_BENCHMARK_ENV = "AIBRIX_RUN_STORAGE_BENCHMARK"
 _LINE_COUNT = 1000
@@ -44,9 +45,25 @@ def _make_benchmark_line(index: int) -> bytes:
 
 
 class TestSmallPartsBenchmark:
+    def _create_benchmark_tos_storage(self, tos_config: dict) -> BaseStorage:
+        if not tos_config["has_credentials"]:
+            pytest.skip("TOS credentials not available")
+
+        if not tos_config["bucket_name"]:
+            pytest.skip("AIBRIX_TEST_TOS_BUCKET environment variable not set")
+
+        # Route benchmark backend selection through the storage factory so the
+        # active TOS implementation stays aligned with production wiring.
+        kwargs = {
+            k: v
+            for k, v in tos_config.items()
+            if v is not None and k != "has_credentials"
+        }
+        return create_storage(StorageType.TOS, **kwargs)
+
     async def _run_small_parts_benchmark(
         self,
-        tos_storage: TOSStorage,
+        tos_storage: BaseStorage,
         monkeypatch: pytest.MonkeyPatch,
         pytestconfig: pytest.Config,
         *,
@@ -474,16 +491,18 @@ class TestSmallPartsBenchmark:
 
     @pytest.mark.asyncio
     async def test_complete_multipart_upload_benchmark_5000_small_parts_legacy(
-        self, tos_storage: TOSStorage, monkeypatch: pytest.MonkeyPatch, pytestconfig
+        self, tos_config: dict, monkeypatch: pytest.MonkeyPatch, pytestconfig
     ) -> None:
+        tos_storage = self._create_benchmark_tos_storage(tos_config)
         await self._run_small_parts_benchmark(
             tos_storage, monkeypatch, pytestconfig, use_base2=False
         )
 
     @pytest.mark.asyncio
     async def test_complete_multipart_upload_benchmark_5000_small_parts_base2(
-        self, tos_storage: TOSStorage, monkeypatch: pytest.MonkeyPatch, pytestconfig
+        self, tos_config: dict, monkeypatch: pytest.MonkeyPatch, pytestconfig
     ) -> None:
+        tos_storage = self._create_benchmark_tos_storage(tos_config)
         await self._run_small_parts_benchmark(
             tos_storage, monkeypatch, pytestconfig, use_base2=True
         )

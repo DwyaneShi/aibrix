@@ -54,6 +54,11 @@ CONSUL_BATCH_DISCOVERY_PSM = os.getenv(
     "AIBRIX_TASK_EXECUTOR_PSM", "inf.aibrix.inference_workers"
 )
 
+# Metadata service envs
+METADATA_MAX_FILE_SIZE = int(
+    os.getenv("AIBRIX_METADATA_MAX_FILE_SIZE", str(1024 * 1024 * 1024))
+)
+
 
 class EnvRestorer:
     """A callable that runs an initial function plus any appended ones in sequence."""
