@@ -98,6 +98,9 @@ func (b *tceMockBackend) BuildRuntime(req *plannerapi.EnqueueRequest, prov *rmty
 	}
 	return &plannerapi.RuntimeRef{
 		Target: "Octagram",
+		Options: map[string]any{
+			TCEMatchingOrderKey: "—",
+		},
 	}, nil
 }
 
