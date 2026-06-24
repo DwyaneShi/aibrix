@@ -62,8 +62,17 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 		return
 	}
 
+	// Default and minimum time window is 1 hour
+	timeWindow := time.Hour
 	startTime := time.Now().UTC().Add(5 * time.Minute)
-	endTime := startTime.Truncate(time.Hour).Add(time.Hour)
+	if req.BatchParams.CompletionWindow != "" {
+		// Update time window if it's valid and greater than default time window
+		if completionWindow, err := time.ParseDuration(string(req.BatchParams.CompletionWindow)); err == nil && completionWindow > timeWindow {
+			timeWindow = completionWindow
+		}
+	}
+	endTime := startTime.Add(timeWindow)
+
 	spec = rmtypes.ResourceProvisionSpec{
 		Credential: rmtypes.ResourceCredential{
 			Provider: rmtypes.ResourceProvisionTypeTCE,
