@@ -52,10 +52,14 @@ class FakeEntityManager(JobEntityManager):
     async def delete_job(self, job: BatchJob) -> None:
         return None
 
-    async def get_job(self, job_id: str) -> Optional[BatchJob]:
+    async def get_job(
+        self, job_id: str, force_reload: bool = False
+    ) -> Optional[BatchJob]:
         return None
 
-    async def list_jobs(self) -> list[BatchJob]:
+    async def list_jobs(
+        self, after: Optional[str] = None, limit: int = 20
+    ) -> list[BatchJob]:
         return []
 
 

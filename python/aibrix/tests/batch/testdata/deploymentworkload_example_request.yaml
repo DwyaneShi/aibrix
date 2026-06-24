@@ -7,29 +7,31 @@ metadata:
     core.tce.byted.org/updatetrigger: "true" # required for deployment creation.
   labels:
     name: batch-tce-vllm-6281d2a8 # job name
-    batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2 # planner_decision.job_id
+    batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2 # render(job_id)
+    batch.aibrix.ai/console_job_id: console-job-123 # spec.aibrix.job_id
     model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model # job name + lower(model name: extracted last segment from template.model_source.uri)
-    psm: inf.aibrix.platform # template.psm
+    psm: inf.aibrix.platform # template.spec.service_id; otherwise env.CONSUL_BATCH_DISCOVERY_PSM
 spec:
   deploymentMeta:
     labels:
       name: batch-tce-vllm-6281d2a8 # job name
-      batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2 # planner_decision.job_id
+      batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2 # render(job_id)
+      batch.aibrix.ai/console_job_id: console-job-123 # spec.aibrix.job_id
       model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model # metadata.labels["model.aibrix.ai/name"]
-      psm: inf.aibrix.platform # template.psm
+      psm: inf.aibrix.platform # metadata.labels["psm"]
     annotations:
-      bytedance.quota.salemode: scheduled # planner_decision.resource_details[].salemode
-      deployment.tce.kubernetes.io/gpu-type: NVIDIA-A30 # planner_decision.resource_details[].resource[].acceleratorType
+      bytedance.quota.salemode: scheduled # spec.aibrix.resource_allocation.resource_details[].salemode
+      deployment.tce.kubernetes.io/gpu-type: NVIDIA-A30 # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorType
       # TODO: Unsupported
       # "deployment.tce.kubernetes.io/overCommitRatioCPU": "1.200",
       # "deployment.tce.kubernetes.io/overCommitRatioGPU": "1.000",
       # "deployment.tce.kubernetes.io/overCommitRatioMemory": "1.500",
-      deployment.tce.kubernetes.io/requestCpuUserDemand: "11" # planner_decision.resource_details[].resource[].cpu if available
-      deployment.tce.kubernetes.io/requestMemUserDemand: 125Gi # planner_decision.resource_details[].resource[].memory if available
-      deployment.tce.kubernetes.io/requestGpuUserDemand: "1" # planner_decision.resource_details[].resource[].acceleratorCount
+      deployment.tce.kubernetes.io/requestCpuUserDemand: "11" # spec.aibrix.resource_allocation.resource_details[].resource[].cpu if available
+      deployment.tce.kubernetes.io/requestMemUserDemand: 125Gi # spec.aibrix.resource_allocation.resource_details[].resource[].memory if available
+      deployment.tce.kubernetes.io/requestGpuUserDemand: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
       # TODO: Unsupported
       # "pod.tce.kubernetes.io/netcls": "481071596",
-      queue-name: compute-3530-yg-federationgpu-non.standard.g19-default-guarantee # planner_decision.resource_details[].resourcePoolName
+      queue-name: compute-3530-yg-federationgpu-non.standard.g19-default-guarantee # spec.aibrix.resource_allocation.resource_details[].resourcePoolName
       # TODO: Unsupported
       # "tce-planning.byted.org/node": "9212820",
       vpa.katalyst.kubewharf.io/enable: "true"
@@ -72,12 +74,12 @@ spec:
       value: true
     - name: KatalystMemoryEnhancement
       value:
-        numa_binding: "false" # false if planner_decision.resource_details[].qos_level is "shared_cores"
+        numa_binding: "false" # false if spec.aibrix.resource_allocation.resource_details[].qos_level is "shared_cores"
     - name: KatalystQosEnhancement
       value:
-        katalyst.kubewharf.io/memory_enhancement: '{"numa_binding":"false","numa_exclusive":"false"}' # false if planner_decision.resource_details[].qos_level is "shared_cores"
+        katalyst.kubewharf.io/memory_enhancement: '{"numa_binding":"false","numa_exclusive":"false"}' # false if spec.aibrix.resource_allocation.resource_details[].qos_level is "shared_cores"
     - name: KatalystQosLevel
-      value: shared_cores # planner_decision.resource_details[].qos_level
+      value: shared_cores # spec.aibrix.resource_allocation.resource_details[].qos_level
     # Matches Octagram default; can omit
     # - name: RDMA
     #   value: false
@@ -89,9 +91,6 @@ spec:
     selector:
       matchLabels:
         name: batch-tce-vllm-6281d2a8 # job name
-        batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2 # planner_decision.job_id
-        model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model # metadata.labels["model.aibrix.ai/name"]
-        psm: inf.aibrix.platform # template.psm
     strategy:
       type: RollingUpdate
       rollingUpdate:
@@ -105,8 +104,8 @@ spec:
       # Added by AutoEvictionEnable feature gate
       # AutoEvictionEnable: "false"
       AvailableZoneRebalance: "true"
-      bytedance.com/main-container-name: llm-engine
-      bytedance.quota.salemode: scheduled # planner_decision.resource_details[].salemode
+      bytedance.com/main-container-name: batch-tce-vllm-6281d2a8
+      bytedance.quota.salemode: scheduled # spec.aibrix.resource_allocation.resource_details[].salemode
       godel.bytedance.com/without-preemption-protection: "true"
       # Added by KatalystMemoryEnhancement feature gate
       # katalyst.cloud/memory_enhancement: '{"numa_binding":"false"}'
@@ -123,12 +122,12 @@ spec:
       # TODO: unsupported
       # pod.tce.kubernetes.io/netcls: "481071596"
       # pod.tce.kubernetes.io/netcls-version: "v2"
-      pod.tce.kubernetes.io/requestCpuUserDemand: "11" # planner_decision.resource_details[].resource[].cpu if available
-      pod.tce.kubernetes.io/requestMemUserDemand: 125Gi # planner_decision.resource_details[].resource[].memory if available
-      pod.tce.kubernetes.io/requestGpuUserDemand: "1" # planner_decision.resource_details[].resource[].acceleratorCount
-      queue-name: compute-3530-yg-federationgpu-non.standard.g19-default-guarantee # planner_decision.resource_details[].resourcePoolName
+      pod.tce.kubernetes.io/requestCpuUserDemand: "11" # spec.aibrix.resource_allocation.resource_details[].resource[].cpu if available
+      pod.tce.kubernetes.io/requestMemUserDemand: 125Gi # spec.aibrix.resource_allocation.resource_details[].resource[].memory if available
+      pod.tce.kubernetes.io/requestGpuUserDemand: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
+      queue-name: compute-3530-yg-federationgpu-non.standard.g19-default-guarantee # spec.aibrix.resource_allocation.resource_details[].resourcePoolName
     containers:
-      - name: llm-engine
+      - name: batch-tce-vllm-6281d2a8
         image: hub.byted.org/aibrix/inf.aibrix.vllm:1.0.0.135_nydus # template.engine.image
         imagePullPolicy: IfNotPresent
         isMainContainer: true
@@ -163,7 +162,7 @@ spec:
           #       divisor: "0"
           #       resource: requests.cpu
           - name: MY_GPU_REQUEST
-            value: "1" # planner_decision.resource_details[].resource[].acceleratorCount
+            value: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
           # Auto-added by Octagram
           # - name: MY_HOST_IP
           #   valueFrom:
@@ -231,17 +230,17 @@ spec:
           # - name: TCE_INSTANCE_WEIGHT
           #   value: "10"
           - name: TCE_INTERNAL_IDC
-            value: YG # Extracted from uppercase(planner_decision.resource_details[].endpoint_cluster(format [CLUSTER-IDC]))
+            value: YG # Extracted from uppercase(spec.aibrix.resource_allocation.resource_details[].endpoint_cluster(format [CLUSTER-IDC]))
           - name: TCE_PHYSICAL_CLUSTER
-            value: Federation # Extracted from uppercase(planner_decision.resource_details[].endpoint_cluster(format [CLUSTER-IDC]))
+            value: Federation # Extracted from uppercase(spec.aibrix.resource_allocation.resource_details[].endpoint_cluster(format [CLUSTER-IDC]))
           - name: TCE_PRIMARY_PORT
             value: fake_port
           - name: TCE_STAGE
             value: all_dc
           - name: LOAD_SERVICE_PSM
-            value: inf.aibrix.platform # template.psm
+            value: inf.aibrix.platform # metadata.labels["psm"]
           - name: TCE_PSM
-            value: inf.aibrix.platform # template.psm
+            value: inf.aibrix.platform # metadata.labels["psm"]
         ports:
           - containerPort: 0
             protocol: TCP
@@ -265,16 +264,16 @@ spec:
             protocol: TCP
         resources:
           cpu:
-            request: "11" # planner_decision.resource_details[].resources[].cpu if available
-            limit: "11" # planner_decision.resource_details[].resource[].cpu if available
+            request: "11" # spec.aibrix.resource_allocation.resource_details[].resources[].cpu if available
+            limit: "11" # spec.aibrix.resource_allocation.resource_details[].resource[].cpu if available
           memory:
-            request: 125Gi # planner_decision.resource_details[].resources[].memory if available
-            limit: 125Gi # planner_decision.resource_details[].resource[].memory if available
-          # This is defined by planner_decision.resource_details[].resource[].acceleratorCategory
+            request: 125Gi # spec.aibrix.resource_allocation.resource_details[].resources[].memory if available
+            limit: 125Gi # spec.aibrix.resource_allocation.resource_details[].resource[].memory if available
+          # This is defined by spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCategory
           # make sure octagram also support "xpu" and "npu"
           gpu:
-            request: "1" # planner_decision.resource_details[].resource[].acceleratorCount
-            limit: "1" # planner_decision.resource_details[].resource[].acceleratorCount
+            request: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
+            limit: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
         volumeMounts:
           # Added by VolumeTreatment
           # - name: bytefuse-aibrix-models
@@ -403,8 +402,8 @@ spec:
                 - -c
                 - /opt/tiger/tce/tce_tools/bin/pre_stop; /home/tiger/.op/docker_pre_stop.sh;
     nodeSelector:
-      accelerator: NVIDIA-A30 # planner_decision.resource_details[].resource[].accelerator
-      nodeLevel: non-standard-g19 # planner_decision.resource_details[].logical_cluster
+      accelerator: NVIDIA-A30 # spec.aibrix.resource_allocation.resource_details[].resource[].accelerator
+      nodeLevel: non-standard-g19 # spec.aibrix.resource_allocation.resource_details[].logical_cluster
     hostNetwork: true
     # TODO: not supported
     # "priorityClassName": "guaranteed-primary-preemptable",

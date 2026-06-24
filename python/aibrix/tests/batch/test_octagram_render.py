@@ -3,6 +3,7 @@ import sys
 import types
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -118,13 +119,19 @@ def _spec(
     template_spec: dict | None = None,
     completion_window: str = "24h",
     resource_allocation: dict | None = None,
+    model: str | None = None,
+    console_job_id: str | None = None,
 ):
-    aibrix = {
+    aibrix: dict[str, Any] = {
         "model_template": {
             "name": template_name,
             "spec": template_spec or _template_spec(),
         }
     }
+    if console_job_id is not None:
+        aibrix["job_id"] = console_job_id
+    if model is not None:
+        aibrix["model"] = model
     if resource_allocation is not None:
         aibrix["resource_allocation"] = resource_allocation
     return BatchJobSpec.from_strings(
@@ -135,7 +142,7 @@ def _spec(
     )
 
 
-def _rendered_env(rendered: dict[str, object]) -> dict[str, str]:
+def _rendered_env(rendered: dict[str, Any]) -> dict[str, str]:
     container = rendered["spec"]["podBase"]["containers"][0]
     return {item["name"]: item["value"] for item in container["env"]}
 
@@ -177,7 +184,10 @@ def test_parse_endpoint_cluster_preserves_cluster_prefix_and_idc_suffix():
 
 def test_octagram_manifest_renderer_matches_example_request_yaml():
     rendered = _render(
-        spec=_spec(template_spec=_request_snapshot_template_spec()),
+        spec=_spec(
+            template_spec=_request_snapshot_template_spec(),
+            console_job_id="console-job-123",
+        ),
         detail=_request_snapshot_resource_detail(),
     )
 
@@ -187,15 +197,28 @@ def test_octagram_manifest_renderer_matches_example_request_yaml():
 def test_octagram_manifest_renderer_renders_expected_tce_fields():
     rendered = _render(
         job_id="6281d2a8-6281ds2a8-a2",
-        spec=_spec(),
+        spec=_spec(console_job_id="console-job-123"),
         detail=_resource_detail(),
     )
 
     assert rendered["metadata"]["name"] == "batch-tce-vllm-6281d2a8"
+    assert rendered["metadata"]["labels"]["batch.aibrix.ai/job_id"] == (
+        "6281d2a8-6281ds2a8-a2"
+    )
+    assert rendered["metadata"]["labels"]["batch.aibrix.ai/console_job_id"] == (
+        "console-job-123"
+    )
     assert rendered["metadata"]["labels"]["model.aibrix.ai/name"] == (
         "batch-tce-vllm-6281d2a8-model_store_open_source_model"
     )
     assert rendered["metadata"]["labels"]["psm"] == "inf.aibrix.platform"
+    assert (
+        rendered["spec"]["deploymentMeta"]["labels"]["batch.aibrix.ai/console_job_id"]
+        == "console-job-123"
+    )
+    assert rendered["spec"]["deployStrategy"]["selector"]["matchLabels"] == {
+        "name": "batch-tce-vllm-6281d2a8"
+    }
 
     feature_gates = rendered["spec"]["featureGates"]
     assert {"name": "UseScheduledResource", "value": True} in feature_gates
@@ -216,6 +239,13 @@ def test_octagram_manifest_renderer_renders_expected_tce_fields():
     assert resources["gpu"] == {"request": "1", "limit": "1"}
     assert resources["cpu"] == {"request": "11", "limit": "11"}
     assert resources["memory"] == {"request": "125Gi", "limit": "125Gi"}
+    assert (
+        rendered["spec"]["podBase"]["annotations"]["bytedance.com/main-container-name"]
+        == "batch-tce-vllm-6281d2a8"
+    )
+    assert rendered["spec"]["podBase"]["containers"][0]["name"] == (
+        "batch-tce-vllm-6281d2a8"
+    )
 
     env = _rendered_env(rendered)
     assert env["MODEL_NAME"] == "model_store_open_source_model"
@@ -257,6 +287,19 @@ def test_octagram_manifest_renderer_uses_workload_psm_for_log_host_paths():
         "opt-tiger-data-log": "/opt/tiger/tce/containers/inf.aibrix.platform",
         "opt-tiger-toutiao-log": "/opt/tiger/tce/containers/inf.aibrix.platform",
         "var-log-tiger": "/opt/tiger/tce/containers/inf.aibrix.platform",
+    }
+
+
+def test_octagram_manifest_renderer_omits_console_job_id_when_not_provided():
+    rendered = _render(spec=_spec())
+
+    assert "batch.aibrix.ai/console_job_id" not in rendered["metadata"]["labels"]
+    assert (
+        "batch.aibrix.ai/console_job_id"
+        not in rendered["spec"]["deploymentMeta"]["labels"]
+    )
+    assert rendered["spec"]["deployStrategy"]["selector"]["matchLabels"] == {
+        "name": "batch-tce-vllm-6281d2a8"
     }
 
 
@@ -432,9 +475,9 @@ def test_octagram_manifest_renderer_defaults_psm_from_env_when_template_missing(
 
     assert rendered["metadata"]["labels"]["psm"] == "env.default.psm"
     assert rendered["spec"]["deploymentMeta"]["labels"]["psm"] == "env.default.psm"
-    assert rendered["spec"]["deployStrategy"]["selector"]["matchLabels"]["psm"] == (
-        "env.default.psm"
-    )
+    assert rendered["spec"]["deployStrategy"]["selector"]["matchLabels"] == {
+        "name": "batch-ning-a10-089890d4"
+    }
 
 
 def test_octagram_manifest_renderer_writes_json_request_for_test_template(tmp_path):

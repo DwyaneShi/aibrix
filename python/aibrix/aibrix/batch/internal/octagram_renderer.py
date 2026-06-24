@@ -16,7 +16,6 @@ from aibrix.logger import init_logger
 logger = init_logger(__name__)
 
 _DEFAULT_NAMESPACE = "default"
-_DEFAULT_CONTAINER_NAME = "llm-engine"
 _DEFAULT_TCE_ENV = "prod"
 _DEFAULT_TCE_STAGE = "all_dc"
 _DEFAULT_TCE_PRIMARY_PORT = "fake_port"
@@ -208,7 +207,6 @@ class OctagramManifestRenderer(_RendererSupport):
         spec: BatchJobSpec,
         prividerSpec: ResourceDetail,
         namespace: str = _DEFAULT_NAMESPACE,
-        container_name: str = _DEFAULT_CONTAINER_NAME,
         tce_env: str = _DEFAULT_TCE_ENV,
         tce_stage: str = _DEFAULT_TCE_STAGE,
         tce_primary_port: str = _DEFAULT_TCE_PRIMARY_PORT,
@@ -222,6 +220,7 @@ class OctagramManifestRenderer(_RendererSupport):
 
         # Construct dynamic values
         job_name = f"batch-{template.name}-{job_id[:8]}".lower()
+        container_name = job_name
         resource = prividerSpec.resource
         # Short-term: until the deployment template carries explicit cpu/memory,
         # derive pod requests from a fixed per-GPU ratio (16 cores + 96Gi/GPU).
@@ -234,6 +233,7 @@ class OctagramManifestRenderer(_RendererSupport):
                 resource.memory = f"{gpu_count * 96}Gi"
         model_name = infer_model_name(template.spec.model_source.uri).lower()
         served_model_name = f"{job_name}-{model_name}"
+        console_job_id = spec.aibrix.job_id if spec.aibrix else None
         cluster_name, idc_name = self._parse_endpoint_cluster(
             prividerSpec.endpoint_cluster
         )
@@ -243,6 +243,7 @@ class OctagramManifestRenderer(_RendererSupport):
         # Layered composition.
         manifest = self._system_base(
             job_id=job_id,
+            console_job_id=console_job_id,
             job_name=job_name,
             served_model_name=served_model_name,
             namespace=namespace,
@@ -275,10 +276,18 @@ class OctagramManifestRenderer(_RendererSupport):
     def _system_base(
         self,
         job_id: str,
+        console_job_id: Optional[str],
         job_name: str,
         served_model_name: str,
         namespace: str,
     ) -> Dict[str, Any]:
+        labels = {
+            "name": job_name,
+            "batch.aibrix.ai/job_id": job_id,
+            "model.aibrix.ai/name": served_model_name,
+        }
+        if console_job_id:
+            labels["batch.aibrix.ai/console_job_id"] = console_job_id
         return {
             "apiVersion": "core.tce.byted.org/v1alpha1",
             "kind": "DeploymentWorkload",
@@ -292,11 +301,7 @@ class OctagramManifestRenderer(_RendererSupport):
                     #     timespec="seconds"
                     # ).replace("+00:00", "Z")
                 },
-                "labels": {
-                    "name": job_name,
-                    "batch.aibrix.ai/job_id": job_id,
-                    "model.aibrix.ai/name": served_model_name,
-                },
+                "labels": labels,
             },
             "spec": {},
         }
@@ -373,6 +378,13 @@ class OctagramManifestRenderer(_RendererSupport):
         psm = manifest["metadata"]["labels"].get("psm")
         if psm:
             manifest["spec"]["deploymentMeta"]["labels"]["psm"] = psm
+        console_job_id = manifest["metadata"]["labels"].get(
+            "batch.aibrix.ai/console_job_id"
+        )
+        if console_job_id:
+            manifest["spec"]["deploymentMeta"]["labels"][
+                "batch.aibrix.ai/console_job_id"
+            ] = console_job_id
 
     def _apply_strategy(
         self,
@@ -385,12 +397,6 @@ class OctagramManifestRenderer(_RendererSupport):
             "selector": {
                 "matchLabels": {
                     "name": manifest["metadata"]["name"],
-                    "batch.aibrix.ai/job_id": manifest["metadata"]["labels"][
-                        "batch.aibrix.ai/job_id"
-                    ],
-                    "model.aibrix.ai/name": manifest["metadata"]["labels"][
-                        "model.aibrix.ai/name"
-                    ],
                 }
             },
             "strategy": {
@@ -401,9 +407,6 @@ class OctagramManifestRenderer(_RendererSupport):
             "revisionHistoryLimit": 5,
             "progressDeadlineSeconds": 2147483647,
         }
-        psm = manifest["metadata"]["labels"].get("psm")
-        if psm:
-            manifest["spec"]["deployStrategy"]["selector"]["matchLabels"]["psm"] = psm
 
     def _apply_pod_base(
         self,

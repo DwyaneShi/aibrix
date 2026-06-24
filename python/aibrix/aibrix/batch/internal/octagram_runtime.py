@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import httpx
 
@@ -80,8 +80,8 @@ class OctagramRuntime(RuntimeBase):
         )
         self._httpx_client_wrapper = context.httpx_client_wrapper
         self._gateway_domain = self._resolve_gateway_domain()
-        self._ready_timeout_seconds = ready_timeout_seconds or getattr(
-            envs, "CONSUL_BATCH_DISCOVERY_TIMEOUT", 900
+        self._ready_timeout_seconds: int = ready_timeout_seconds or int(
+            getattr(envs, "CONSUL_BATCH_DISCOVERY_TIMEOUT", 900)
         )
         self._mgr_deleted_handler = entity_manager.on_job_deleted(
             self._job_deleted_handler
@@ -193,7 +193,10 @@ class OctagramRuntime(RuntimeBase):
                 service_id=handle.psm,
                 timeout=30.0,
             )
-        return Endpoint(source=handle.source, model_name=handle.model_name)
+        return Endpoint(
+            source=cast(Optional[EndpointSource], handle.source),
+            model_name=handle.model_name,
+        )
 
     async def _teardown(self, handle: Optional[OctagramHandle]) -> None:
         if handle is not None:
@@ -217,12 +220,13 @@ class OctagramRuntime(RuntimeBase):
                 "Wait for model endpoints to be discoverable",
                 job_id=self._active_job_id,
                 model_name=handle.model_name,
+                deploy_name=handle.workload_name,
                 service_id=handle.psm,
                 timeout_seconds=self._ready_timeout_seconds,
             )  # type: ignore[call-arg]
             await model_discovery.wait_for_model_endpoints(
                 served_model_name=handle.model_name,
-                timeout_seconds=self._ready_timeout_seconds,
+                timeout_seconds=float(self._ready_timeout_seconds),
                 service_id=handle.psm,
             )
         except TimeoutError as ex:
@@ -271,7 +275,9 @@ class OctagramRuntime(RuntimeBase):
     async def _wait_for_workload_ready(
         self, cluster: str, namespace: str, workload_name: str, replicas: int
     ) -> None:
-        deadline = asyncio.get_running_loop().time() + self._ready_timeout_seconds
+        deadline = asyncio.get_running_loop().time() + float(
+            self._ready_timeout_seconds
+        )
         while True:
             if self._delete_requested.is_set():
                 raise asyncio.CancelledError
@@ -490,6 +496,7 @@ class OctagramRuntime(RuntimeBase):
                 async with httpx.AsyncClient() as client:
                     response = await client.request(method, url, **kwargs)
 
+            assert response is not None
             response.raise_for_status()
             payload = response.json()
         except Exception as ex:
