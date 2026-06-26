@@ -19,7 +19,23 @@ package metrics
 import "github.com/vllm-project/aibrix/apps/console/api/config"
 
 // Only used for extending the custom metrics backends.
-// Do not modify this method.
 func setupMetricsExtension(cfg *config.MetricsConfigExtension) ([]Sink, error) {
-	return nil, nil
+	if cfg == nil {
+		return nil, nil
+	}
+
+	sinks := []Sink{}
+	if cfg.BytedMetricsEnabled {
+		sink, err := NewBytedSink(cfg.BytedMetricsPrefix)
+		if err != nil {
+			return nil, err
+		}
+		sinks = append(sinks, sink)
+	}
+
+	if len(sinks) == 0 {
+		return nil, nil
+	}
+
+	return sinks, nil
 }

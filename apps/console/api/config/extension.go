@@ -17,12 +17,20 @@ limitations under the License.
 package config
 
 // Only used for extending the custom metrics backends.
-// This SHOULD be left empty; all open-source backends should
-// be placed in MetricsConfig directly.
 type MetricsConfigExtension struct {
+	BytedMetricsEnabled bool
+	BytedMetricsPrefix  string
 }
 
-// Do not modify this method.
 func loadMetricsConfigExtension() *MetricsConfigExtension {
-	return nil
+	mc := &MetricsConfigExtension{
+		BytedMetricsEnabled: envBool("METRICS_BYTEDMETRICS_ENABLED", true),
+		BytedMetricsPrefix:  envOrDefault("METRICS_BYTEDMETRICS_PREFIX", "aibrix_console.prod"),
+	}
+
+	if !mc.BytedMetricsEnabled {
+		return nil
+	}
+
+	return mc
 }
