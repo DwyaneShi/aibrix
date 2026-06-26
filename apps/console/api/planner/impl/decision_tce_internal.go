@@ -24,6 +24,7 @@ import (
 
 	plannerclient "github.com/vllm-project/aibrix/apps/console/api/planner/client"
 	rmtypes "github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
+	"k8s.io/klog/v2"
 )
 
 // defaultRoleName matches the StormService default role.
@@ -107,6 +108,19 @@ func populateTCEDetails(details *plannerclient.ResourceDetails, resource *planne
 	}
 	if seg.Replicas != nil && *seg.Replicas > 0 {
 		resource.Replica = *seg.Replicas
+	}
+
+	// Adjust the accelerator count to be the number of accelerators per replica.
+	if resource.Replica > 0 {
+		if resource.AcceleratorCount%resource.Replica != 0 {
+			klog.Errorf("TCE allocation segment has accelerator count %d that is not divisible by replica count %d", resource.AcceleratorCount, resource.Replica)
+		}
+		resource.AcceleratorCount = resource.AcceleratorCount / resource.Replica
+	}
+
+	// Ensure the accelerator count is at least 1.
+	if resource.AcceleratorCount <= 0 {
+		resource.AcceleratorCount = 1
 	}
 
 	// Mirror onto the flat fields the console handler/UI read; only set on the
