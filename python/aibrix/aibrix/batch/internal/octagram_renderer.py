@@ -29,6 +29,9 @@ _OCTAGRAM_ACCELERATOR_TYPE_MAPPING = {
     "NVIDIA-A100-SXM4-80GB": "A100-SXM4-80GB",
 }
 
+_OCTAGRAM_XPU_RESOURCE_NAME = "bytedance.com/xpu"
+_OCTAGRAM_NPU_RESOURCE_NAME = "habana.ai/goya"
+
 
 def _map_accelerator_type(accelerator_type: Optional[str]) -> str:
     if not accelerator_type:
@@ -205,7 +208,7 @@ class OctagramManifestRenderer(_RendererSupport):
         self,
         job_id: str,
         spec: BatchJobSpec,
-        prividerSpec: ResourceDetail,
+        providerSpec: ResourceDetail,
         namespace: str = _DEFAULT_NAMESPACE,
         tce_env: str = _DEFAULT_TCE_ENV,
         tce_stage: str = _DEFAULT_TCE_STAGE,
@@ -221,7 +224,7 @@ class OctagramManifestRenderer(_RendererSupport):
         # Construct dynamic values
         job_name = f"batch-{template.name}-{job_id[:8]}".lower()
         container_name = job_name
-        resource = prividerSpec.resource
+        resource = providerSpec.resource
         # Short-term: until the deployment template carries explicit cpu/memory,
         # derive pod requests from a fixed per-GPU ratio (16 cores + 96Gi/GPU).
         # Only fill when absent so future template-provided values win.
@@ -235,7 +238,7 @@ class OctagramManifestRenderer(_RendererSupport):
         served_model_name = f"{job_name}-{model_name}"
         console_job_id = spec.aibrix.job_id if spec.aibrix else None
         cluster_name, idc_name = self._parse_endpoint_cluster(
-            prividerSpec.endpoint_cluster
+            providerSpec.endpoint_cluster
         )
         self.cluster_name = cluster_name
         self.idc_name = idc_name
@@ -249,13 +252,13 @@ class OctagramManifestRenderer(_RendererSupport):
             namespace=namespace,
         )
         self._apply_template_psm(manifest, template)
-        self._apply_feature_gates(manifest, prividerSpec)
-        self._apply_deployment_meta(manifest, prividerSpec, resource)
+        self._apply_feature_gates(manifest, providerSpec)
+        self._apply_deployment_meta(manifest, providerSpec, resource)
         self._apply_strategy(manifest, resource)
         self._apply_pod_base(
             manifest=manifest,
             template=template,
-            detail=prividerSpec,
+            detail=providerSpec,
             resource=resource,
             container_name=container_name,
             cluster_name=cluster_name,
@@ -647,11 +650,11 @@ class OctagramManifestRenderer(_RendererSupport):
     def _build_hpa_resource_percentage(
         resource: ResourceRequirement,
     ) -> Dict[str, int]:
-        metrics = {OctagramManifestRenderer._resolve_hpa_metric(resource): 1}
+        metrics = {OctagramManifestRenderer._resolve_hpa_metric(resource): 100}
         if resource.cpu:
-            metrics["cpu"] = 1
+            metrics["cpu"] = 100
         if resource.memory:
-            metrics["memory"] = 1
+            metrics["memory"] = 100
         return metrics
 
     @staticmethod
@@ -706,17 +709,30 @@ class OctagramManifestRenderer(_RendererSupport):
             )
         return env
 
-    def _container_resources(
-        self, resource: ResourceRequirement
-    ) -> Dict[str, Dict[str, str]]:
+    def _container_resources(self, resource: ResourceRequirement) -> Dict[str, Any]:
         accelerator_key = _accelerator_category(resource)
         accelerator_count = str(resource.accelerator_count or 0)
-        resources = {
-            accelerator_key: {
-                "request": accelerator_count,
-                "limit": accelerator_count,
-            },
+        request_limit = {
+            "request": accelerator_count,
+            "limit": accelerator_count,
         }
+        resources: Dict[str, Any] = {}
+        if accelerator_key == "xpu":
+            resources["extended"] = [
+                {
+                    "name": _OCTAGRAM_XPU_RESOURCE_NAME,
+                    "requestLimit": request_limit,
+                }
+            ]
+        elif accelerator_key == "npu":
+            resources["extended"] = [
+                {
+                    "name": _OCTAGRAM_NPU_RESOURCE_NAME,
+                    "requestLimit": request_limit,
+                }
+            ]
+        else:
+            resources[accelerator_key] = request_limit
         if resource.cpu:
             resources["cpu"] = {"request": resource.cpu, "limit": resource.cpu}
         if resource.memory:

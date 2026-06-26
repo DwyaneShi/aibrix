@@ -1,0 +1,385 @@
+apiVersion: core.tce.byted.org/v1alpha1
+kind: DeploymentWorkload
+metadata:
+  name: batch-tce-vllm-6281d2a8
+  namespace: default
+  annotations:
+    core.tce.byted.org/updatetrigger: "true"
+  labels:
+    name: batch-tce-vllm-6281d2a8
+    batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2
+    model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model
+    batch.aibrix.ai/console_job_id: console-job-123
+    psm: inf.aibrix.platform
+spec:
+  featureGates:
+    - name: ContainerResourceView
+      value: container
+    - name: ContainerShmSize
+      value: 100000
+    - name: IPv6OnlyCompatible
+      value: true
+    - name: UseScheduledResource
+      value: true
+    - name: KatalystMemoryEnhancement
+      value:
+        numa_binding: "false"
+    - name: KatalystQosEnhancement
+      value:
+        katalyst.kubewharf.io/memory_enhancement: '{"numa_binding":"false","numa_exclusive":"false"}'
+    - name: KatalystQosLevel
+      value: shared_cores
+  deploymentMeta:
+    labels:
+      name: batch-tce-vllm-6281d2a8
+      batch.aibrix.ai/job_id: 6281d2a8-6281ds2a8-a2
+      model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model
+      psm: inf.aibrix.platform
+      batch.aibrix.ai/console_job_id: console-job-123
+    annotations:
+      bytedance.quota.salemode: scheduled
+      deployment.tce.kubernetes.io/xpu-type: MLU590-M9DK
+      deployment.tce.kubernetes.io/requestGpuUserDemand: "1"
+      queue-name: compute-0-zc-federationgpu-dandelion.ai.mix-default
+      vpa.katalyst.kubewharf.io/enable: "true"
+      deployment.tce.kubernetes.io/requestCpuUserDemand: "16"
+      deployment.tce.kubernetes.io/requestMemUserDemand: 96Gi
+  deployStrategy:
+    replicas: 1
+    selector:
+      matchLabels:
+        name: batch-tce-vllm-6281d2a8
+    strategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+    minReadySeconds: 10
+    revisionHistoryLimit: 5
+    progressDeadlineSeconds: 2147483647
+  podBase:
+    annotations:
+      AvailableZoneRebalance: "true"
+      bytedance.com/main-container-name: batch-tce-vllm-6281d2a8
+      bytedance.quota.salemode: scheduled
+      godel.bytedance.com/without-preemption-protection: "true"
+      pod.kubernetes.io/explicit.deletion: "true"
+      pod.tce.kubernetes.io/autoport: "1"
+      pod.tce.kubernetes.io/requestGpuUserDemand: "1"
+      queue-name: compute-0-zc-federationgpu-dandelion.ai.mix-default
+      pod.tce.kubernetes.io/requestCpuUserDemand: "16"
+      pod.tce.kubernetes.io/requestMemUserDemand: 96Gi
+    containers:
+      - name: batch-tce-vllm-6281d2a8
+        image: hub.byted.org/aibrix/inf.aibrix.vllm:1.0.0.135_nydus
+        imagePullPolicy: IfNotPresent
+        isMainContainer: true
+        env:
+          - name: AIBRIX_LLM_ENGINE
+            value: vllm
+          - name: HDFS_MODEL_PATH
+            value: hdfs://haruna/home/byte_mlsys_bernard/ssd/models/Qwen3.5-0.8B-Merlin-HF/1.0.c84b5056/model_store_open_source_model
+          - name: MODEL_NAME
+            value: model_store_open_source_model
+          - name: AIBRIX_SERVED_MODEL_NAME
+            value: batch-tce-vllm-6281d2a8-model_store_open_source_model
+          - name: EXTRA_PARAMETERS
+            value: --gpu-memory-utilization 0.85
+          - name: TP_SIZE
+            value: "1"
+          - name: PP_SIZE
+            value: "1"
+          - name: DP_SIZE
+            value: "1"
+          - name: MY_GPU_REQUEST
+            value: "1"
+          - name: TCE_CLUSTER
+            value: Federation
+          - name: TCE_ENV
+            value: prod
+          - name: TCE_INTERNAL_IDC
+            value: ZC
+          - name: TCE_PHYSICAL_CLUSTER
+            value: Federation
+          - name: TCE_PRIMARY_PORT
+            value: fake_port
+          - name: TCE_STAGE
+            value: all_dc
+          - name: LOAD_SERVICE_PSM
+            value: inf.aibrix.platform
+          - name: TCE_PSM
+            value: inf.aibrix.platform
+        ports:
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+          - containerPort: 0
+            protocol: TCP
+        resources:
+          extended:
+            - name: bytedance.com/xpu
+              requestLimit:
+                request: "1"
+                limit: "1"
+          cpu:
+            request: "16"
+            limit: "16"
+          memory:
+            request: 96Gi
+            limit: 96Gi
+        volumeMounts:
+          - name: bernard
+            mountPath: /opt/tiger/bernard
+            readOnly: true
+          - name: bernard-tce-tools
+            mountPath: /opt/tiger/tce/tce_tools
+            readOnly: true
+          - name: cgroups
+            mountPath: /sys/fs/cgroup
+            readOnly: true
+          - name: chadc
+            mountPath: /opt/tiger/chadc
+            readOnly: true
+          - name: consul-deploy
+            mountPath: /opt/tiger/consul_deploy
+            readOnly: true
+          - name: core
+            mountPath: /opt/tiger/cores
+            readOnly: true
+          - name: databus
+            mountPath: /tmp
+          - name: databus-new
+            mountPath: /opt/tmp
+            readOnly: true
+          - name: dist
+            mountPath: /opt/tiger/dist/
+            readOnly: true
+          - name: host-usr-local-tao-agent-modules-bvc
+            mountPath: /usr/local/tao/agent/modules/bvc/
+            readOnly: true
+          - name: jdk
+            mountPath: /opt/tiger/jdk
+            readOnly: true
+          - name: linux-gnu
+            mountPath: /opt/tiger/x86_64-linux-gnu
+            readOnly: true
+          - name: network
+            mountPath: /opt/tiger/tce/network
+            readOnly: true
+          - name: opt-tiger-data-log
+            mountPath: /opt/tiger/data/log
+            subPath: $(MY_POD_NAME)/data/log
+          - name: opt-tiger-toutiao-log
+            mountPath: /opt/tiger/toutiao/log
+            subPath: $(MY_POD_NAME)/toutiao/log
+          - name: pyutil
+            mountPath: /opt/tiger/pyutil
+            readOnly: true
+          - name: run
+            mountPath: /run
+          - name: run-lock
+            mountPath: /run/lock
+            readOnly: true
+          - name: ss-bin
+            mountPath: /opt/tiger/ss_bin
+            readOnly: true
+          - name: sys
+            mountPath: /sys
+            readOnly: true
+          - name: sys-resolv-conf
+            mountPath: /etc/resolv.conf
+            readOnly: true
+          - name: tce-tools-binary
+            mountPath: /opt/tiger/tce/tce_tools/bin/binary
+            readOnly: true
+          - name: var-log-tiger
+            mountPath: /var/log/tiger
+            subPath: $(MY_POD_NAME)/var/log/tiger
+          - name: yarn-deploy
+            mountPath: /opt/tiger/yarn_deploy
+            readOnly: true
+        livenessProbe:
+          exec:
+            command:
+              - bash
+              - -c
+              - /opt/tiger/bernard/bernard_tools/bin/liveness_check.sh
+          initialDelaySeconds: 180
+          failureThreshold: 5
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+              - bash
+              - -c
+              - /opt/tiger/tce/tce_tools/bin/readiness_check.sh
+          failureThreshold: 2
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 30
+        lifecycle:
+          preStop:
+            exec:
+              command:
+                - bash
+                - -c
+                - /opt/tiger/tce/tce_tools/bin/pre_stop; /home/tiger/.op/docker_pre_stop.sh;
+    nodeSelector:
+      accelerator: MLU590-M9DK
+      nodeLevel: dandelion-ai-mix
+    hostNetwork: true
+    terminationGracePeriodSeconds: 30
+    volumes:
+      - name: bernard
+        hostPath:
+          path: /opt/tiger/bernard
+          type: ""
+      - name: bernard-tce-tools
+        hostPath:
+          path: /opt/tiger/bernard/bernard_tools
+          type: ""
+      - name: cgroups
+        hostPath:
+          path: /sys/fs/cgroup
+          type: ""
+      - name: chadc
+        hostPath:
+          path: /opt/tiger/chadc
+          type: ""
+      - name: consul-deploy
+        hostPath:
+          path: /opt/tiger/consul_deploy
+          type: ""
+      - name: core
+        hostPath:
+          path: /opt/tiger/cores
+          type: DirectoryOrCreate
+      - name: databus
+        hostPath:
+          path: /tmp
+          type: ""
+      - name: databus-new
+        hostPath:
+          path: /opt/tmp
+          type: ""
+      - name: dist
+        hostPath:
+          path: /opt/tiger/dist/
+          type: ""
+      - name: host-usr-local-tao-agent-modules-bvc
+        hostPath:
+          path: /usr/local/tao/agent/modules/bvc/
+          type: ""
+      - name: jdk
+        hostPath:
+          path: /opt/tiger/jdk
+          type: ""
+      - name: linux-gnu
+        hostPath:
+          path: /usr/lib/x86_64-linux-gnu
+          type: ""
+      - name: network
+        hostPath:
+          path: /opt/tiger/tce/network
+          type: ""
+      - name: opt-tiger-data-log
+        hostPath:
+          path: /opt/tiger/tce/containers/inf.aibrix.platform
+          type: DirectoryOrCreate
+      - name: opt-tiger-toutiao-log
+        hostPath:
+          path: /opt/tiger/tce/containers/inf.aibrix.platform
+          type: DirectoryOrCreate
+      - name: var-log-tiger
+        hostPath:
+          path: /opt/tiger/tce/containers/inf.aibrix.platform
+          type: DirectoryOrCreate
+      - name: pyutil
+        hostPath:
+          path: /opt/tiger/pyutil
+          type: ""
+      - name: run
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Mi
+      - name: run-lock
+        hostPath:
+          path: /run/lock
+          type: ""
+      - name: ss-bin
+        hostPath:
+          path: /opt/tiger/ss_bin
+          type: ""
+      - name: sys
+        hostPath:
+          path: /sys
+          type: ""
+      - name: sys-resolv-conf
+        hostPath:
+          path: /etc/resolv.conf
+          type: ""
+      - name: tce-tools-binary
+        hostPath:
+          path: /opt/tiger/tce/tce_tools/bin/binary
+          type: ""
+      - name: yarn-deploy
+        hostPath:
+          path: /opt/tiger/yarn_deploy
+          type: ""
+  treatments:
+    - type: PreTreatment
+      data:
+        apiVersion: core.tce.byted.org/v1alpha1
+        kind: IdentityTreatment
+        metadata:
+          name: batch-tce-vllm-6281d2a8
+          namespace: default
+        spec:
+          authType: psm
+          user: jingyuan.zhang0929
+        status: {}
+    - type: PostTreatment
+      data:
+        apiVersion: core.tce.byted.org/v1alpha1
+        kind: HPATreatment
+        metadata:
+          name: batch-tce-vllm-6281d2a8
+          namespace: default
+        spec:
+          hpaExtensionConfig:
+            resourceUtilizationConfig:
+              rules:
+                - effectiveWindow:
+                    startTime: "202605221800"
+                    lastMinutes: 1440
+                    location: utc
+                  maxReplica: 1
+                  minReplica: 1
+                  resourcePercentage:
+                    xpu: 100
+                    cpu: 100
+                    memory: 100
+                - maxReplica: 0
+                  minReplica: 0
+                  resourcePercentage:
+                    xpu: 100
+                    cpu: 100
+                    memory: 100
+        status: {}

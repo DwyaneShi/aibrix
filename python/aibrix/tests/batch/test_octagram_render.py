@@ -113,6 +113,18 @@ def _request_snapshot_resource_detail() -> ResourceDetail:
     )
 
 
+def _request_snapshot_xpu_resource_detail() -> ResourceDetail:
+    return _resource_detail(
+        endpoint_cluster="Federation-ZC",
+        resource_pool_name="compute-0-zc-federationgpu-dandelion.ai.mix-default",
+        logical_cluster="dandelion-ai-mix",
+        accelerator_type="MLU590-M9DK",
+        accelerator_category="xpu",
+        cpu="16",
+        memory="96Gi",
+    )
+
+
 def _spec(
     *,
     template_name: str = "tce-vllm",
@@ -160,7 +172,7 @@ def _render(
     return renderer.render(
         job_id=job_id,
         spec=spec or _spec(),
-        prividerSpec=detail or _resource_detail(),
+        providerSpec=detail or _resource_detail(),
     )
 
 
@@ -170,6 +182,11 @@ def _load_testdata_yaml(name: str):
 
 def _normalized_request_snapshot_yaml():
     expected = _load_testdata_yaml("deploymentworkload_example_request.yaml")
+    return expected
+
+
+def _normalized_xpu_request_snapshot_yaml():
+    expected = _load_testdata_yaml("deploymentworkload_example_request_xpu.yaml")
     return expected
 
 
@@ -192,6 +209,18 @@ def test_octagram_manifest_renderer_matches_example_request_yaml():
     )
 
     assert rendered == _normalized_request_snapshot_yaml()
+
+
+def test_octagram_manifest_renderer_matches_example_request_xpu_yaml():
+    rendered = _render(
+        spec=_spec(
+            template_spec=_request_snapshot_template_spec(),
+            console_job_id="console-job-123",
+        ),
+        detail=_request_snapshot_xpu_resource_detail(),
+    )
+
+    assert rendered == _normalized_xpu_request_snapshot_yaml()
 
 
 def test_octagram_manifest_renderer_renders_expected_tce_fields():
@@ -338,7 +367,7 @@ def test_octagram_manifest_renderer_clamps_window_to_resource_allocation_deadlin
     assert rules[1] == {
         "maxReplica": 0,
         "minReplica": 0,
-        "resourcePercentage": {"gpu": 1, "cpu": 1, "memory": 1},
+        "resourcePercentage": {"gpu": 100, "cpu": 100, "memory": 100},
     }
 
 
@@ -359,9 +388,14 @@ def test_octagram_manifest_renderer_maps_xpu_category_to_xpu_annotation():
 
     assert "deployment.tce.kubernetes.io/gpu-type" not in deployment_annotations
     assert deployment_annotations["deployment.tce.kubernetes.io/xpu-type"] == "BI-XPU"
-    assert resources["xpu"] == {"request": "2", "limit": "2"}
-    assert rules[0]["resourcePercentage"] == {"xpu": 1, "cpu": 1, "memory": 1}
-    assert rules[1]["resourcePercentage"] == {"xpu": 1, "cpu": 1, "memory": 1}
+    assert resources["extended"] == [
+        {
+            "name": "bytedance.com/xpu",
+            "requestLimit": {"request": "2", "limit": "2"},
+        }
+    ]
+    assert rules[0]["resourcePercentage"] == {"xpu": 100, "cpu": 100, "memory": 100}
+    assert rules[1]["resourcePercentage"] == {"xpu": 100, "cpu": 100, "memory": 100}
 
 
 def test_octagram_manifest_renderer_maps_npu_category_to_habana_annotation():
@@ -382,9 +416,14 @@ def test_octagram_manifest_renderer_maps_npu_category_to_habana_annotation():
     assert (
         deployment_annotations["deployment.tce.kubernetes.io/habana-type"] == "HL-325"
     )
-    assert resources["npu"] == {"request": "1", "limit": "1"}
-    assert rules[0]["resourcePercentage"] == {"npu": 1, "cpu": 1, "memory": 1}
-    assert rules[1]["resourcePercentage"] == {"npu": 1, "cpu": 1, "memory": 1}
+    assert resources["extended"] == [
+        {
+            "name": "habana.ai/goya",
+            "requestLimit": {"request": "1", "limit": "1"},
+        }
+    ]
+    assert rules[0]["resourcePercentage"] == {"npu": 100, "cpu": 100, "memory": 100}
+    assert rules[1]["resourcePercentage"] == {"npu": 100, "cpu": 100, "memory": 100}
 
 
 def test_octagram_manifest_renderer_includes_cpu_and_memory_in_hpa_resource_percentage():
@@ -396,8 +435,8 @@ def test_octagram_manifest_renderer_includes_cpu_and_memory_in_hpa_resource_perc
 
     assert rules[0]["maxReplica"] == 3
     assert rules[0]["minReplica"] == 3
-    assert rules[0]["resourcePercentage"] == {"gpu": 1, "cpu": 1, "memory": 1}
-    assert rules[1]["resourcePercentage"] == {"gpu": 1, "cpu": 1, "memory": 1}
+    assert rules[0]["resourcePercentage"] == {"gpu": 100, "cpu": 100, "memory": 100}
+    assert rules[1]["resourcePercentage"] == {"gpu": 100, "cpu": 100, "memory": 100}
 
 
 def test_octagram_manifest_renderer_omits_empty_cpu_and_memory_fields():
@@ -426,8 +465,8 @@ def test_octagram_manifest_renderer_omits_empty_cpu_and_memory_fields():
     assert "pod.tce.kubernetes.io/requestMemUserDemand" not in pod_annotations
     assert "cpu" not in resources
     assert "memory" not in resources
-    assert rules[0]["resourcePercentage"] == {"gpu": 1}
-    assert rules[1]["resourcePercentage"] == {"gpu": 1}
+    assert rules[0]["resourcePercentage"] == {"gpu": 100}
+    assert rules[1]["resourcePercentage"] == {"gpu": 100}
 
 
 def test_octagram_manifest_renderer_adds_scheduled_feature_gate_conditionally():
@@ -483,8 +522,19 @@ def test_octagram_manifest_renderer_defaults_psm_from_env_when_template_missing(
 def test_octagram_manifest_renderer_writes_json_request_for_test_template(tmp_path):
     rendered = _render(
         job_id="089890d4-1113-450f-b1c7-9b2d5cd55510",
-        spec=_spec(),
-        detail=_resource_detail(),
+        spec=_spec(
+            template_spec=_template_spec(service_id="inf.aibrix.inference_workers"),
+        ),
+        detail=_resource_detail(
+            cpu="16",
+            memory="96Gi",
+            accelerator_count=1,
+            accelerator_category="xpu",
+            accelerator_type="MLU590-M9DK",
+            resource_pool_name="compute-0-zc-federationgpu-dandelion.ai.mix-default",
+            endpoint_cluster="Federation-ZC",
+            logical_cluster="dandelion-ai-mix",
+        ),
         now_provider=lambda: datetime.now(timezone.utc),
     )
     json_path = tmp_path / "deploymentworkload_example_request_test.json"
