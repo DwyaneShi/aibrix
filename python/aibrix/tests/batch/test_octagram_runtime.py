@@ -14,7 +14,8 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Optional, cast
 
 import httpx
 import pytest
@@ -23,12 +24,19 @@ from aibrix import envs
 from aibrix.batch.internal.octagram_runtime import OctagramHandle, OctagramRuntime
 from aibrix.batch.job_entity import (
     BatchJob,
+    BatchJobEndpoint,
     BatchJobError,
     BatchJobErrorCode,
     BatchJobSpec,
+    BatchJobState,
+    BatchJobStatus,
+    JobRuntimeRef,
+    ObjectMeta,
+    TypeMeta,
 )
 from aibrix.batch.state import JobEntityManager
 from aibrix.context import InfrastructureContext
+from tests.batch.internal.octagram_backend import FakeOctagramRenderer
 
 
 class FakeEntityManager(JobEntityManager):
@@ -112,7 +120,9 @@ def _handle() -> OctagramHandle:
 
 
 def _runtime(
-    wrapper: FakeHttpxClientWrapper, monkeypatch: pytest.MonkeyPatch
+    wrapper: FakeHttpxClientWrapper,
+    monkeypatch: pytest.MonkeyPatch,
+    renderer: Optional[FakeOctagramRenderer] = None,
 ) -> OctagramRuntime:
     monkeypatch.setattr(
         envs,
@@ -121,7 +131,45 @@ def _runtime(
     )
     return OctagramRuntime(
         InfrastructureContext(httpx_client_wrapper=wrapper),
-        FakeEntityManager(),
+        renderer=cast(Any, renderer),
+    )
+
+
+def _make_job(job_id: str = "job-123456789abc") -> BatchJob:
+    spec = BatchJobSpec.from_strings(
+        input_file_id="input-file-1",
+        endpoint=BatchJobEndpoint.CHAT_COMPLETIONS.value,
+        completion_window="24h",
+        aibrix={
+            "model_template": {"name": "mock-template"},
+            "runtime": {"target": "tce"},
+            "resource_allocation": {
+                "provision_id": "reservation-1",
+                "provision_resource_deadline": 3600,
+                "resource_details": [
+                    {
+                        "endpoint_cluster": "cluster-a",
+                        "gpu_type": "H100",
+                        "replica": 1,
+                    }
+                ],
+            },
+        },
+    )
+    status = BatchJobStatus.model_validate(
+        {
+            "jobID": job_id,
+            "state": BatchJobState.IN_PROGRESS,
+            "createdAt": datetime.now(timezone.utc),
+            "inProgressAt": datetime.now(timezone.utc),
+        }
+    )
+    return BatchJob(
+        sessionID="session-1",
+        typeMeta=TypeMeta(apiVersion="batch/v1", kind="Job"),
+        metadata=ObjectMeta.model_validate({"name": "job", "namespace": "default"}),
+        spec=spec,
+        status=status,
     )
 
 
@@ -318,6 +366,74 @@ async def test_wait_for_workload_ready_404_raises_not_found_error(
 
     assert exc_info.value.code == BatchJobErrorCode.RESOURCE_NOTFOUND_ERROR.value
     assert "Octagram workload status check failed (404): gone" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_octagram_runtime_builds_execution_ref_with_current_payload_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _make_job()
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-1234"
+    )
+    runtime = _runtime(
+        FakeHttpxClientWrapper(
+            {"POST": [_response("POST", base_url, 200, payload={"data": {}})]}
+        ),
+        monkeypatch,
+        renderer=FakeOctagramRenderer(),
+    )
+    await runtime._provision(job, job.job_id)
+
+    execution = runtime._build_runtime_ref(job)
+
+    assert execution is not None
+    assert execution.driver_type == "tce"
+    assert execution.owner_ref == "cluster-a/default/batch-job-1234"
+    assert execution.reconnect_payload == {
+        "cluster": "cluster-a",
+        "namespace": "default",
+        "workloadName": "batch-job-1234",
+        "modelName": "batch-job-1234",
+        "psm": "fake-psm.service.hl",
+        "baseUrl": None,
+        "replicas": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_octagram_runtime_reconnect_accepts_current_payload_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _make_job()
+    runtime = _runtime(FakeHttpxClientWrapper({"POST": []}), monkeypatch)
+
+    handle = await runtime._reconnect(
+        job,
+        job.job_id,
+        JobRuntimeRef(
+            driverType="tce",
+            ownerRef="cluster-a/default/batch-job-1234",
+            reconnectPayload={
+                "cluster": "cluster-a",
+                "namespace": "default",
+                "workloadName": "batch-job-1234",
+                "modelName": "batch-job-1234",
+                "psm": "fake-psm.service.hl",
+                "baseUrl": None,
+                "replicas": 1,
+            },
+        ),
+    )
+
+    assert handle is not None
+    assert handle.cluster == "cluster-a"
+    assert handle.namespace == "default"
+    assert handle.workload_name == "batch-job-1234"
+    assert handle.model_name == "batch-job-1234"
+    assert handle.psm == "fake-psm.service.hl"
+    assert runtime._active_handle == handle
 
 
 @pytest.mark.asyncio

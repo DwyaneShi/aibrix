@@ -41,6 +41,9 @@ from aibrix.logger import init_logger
 from aibrix.metadata.app import build_app
 from aibrix.metadata.setting import settings
 from aibrix.storage import StorageType
+from tests.batch.internal.octagram_backend import (
+    configure_local_metastore_octagram_backend,
+)
 from tests.batch.job_driver.runtime.deployment_backend import (
     configure_local_metastore_deployment_backend,
 )
@@ -766,6 +769,29 @@ E2E_BACKENDS: dict[str, E2ETestBackend] = {
         "local_metastore_job",
         features=("restart_phase_recovery",),
     ),
+    "local_job_using_octagram": E2ETestBackend(
+        "local_job_using_octagram",
+        request_kwargs={
+            "aibrix_template": "mock-template",
+            "provider": "tce",
+        },
+        features=(
+            "support_runtime",
+            "fake_runtime",
+            "fake_provisioning_runtime",
+            "finalizing_cancel_api_race",
+            "service_discovery",
+        ),
+        runtime_debug_config={
+            "teardown_calls_key": "runtime_teardown_calls",
+            "endpoint_source_builds_key": "octagram_endpoint_source_builds",
+            "runtime_create_target_key": "service_http_client",
+            "runtime_create_attr": "posts",
+            "runtime_delete_target_key": "service_http_client",
+            "runtime_delete_attr": "deletes",
+        },
+        configure_app=configure_local_metastore_octagram_backend,
+    ),
     "local_job_using_deployment": E2ETestBackend(
         "local_job_using_deployment",
         request_kwargs={
@@ -918,6 +944,7 @@ def build_batch_request(
         runtime_targets = {
             "deployment": "Kubernetes",
             "k8s_job": "KubernetesJob",
+            "tce": "tce",
         }
         runtime_target = runtime_targets.get(provider)
         if runtime_target is not None:

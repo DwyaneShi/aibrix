@@ -27,8 +27,12 @@ from aibrix.batch.client import EndpointSource
 from aibrix.batch.client.sources import DiscoveryEndpointSource, GatewayEndpointSource
 from aibrix.batch.internal.octagram_renderer import OctagramManifestRenderer
 from aibrix.batch.job_driver.runtime import Endpoint, RuntimeBase, register_runtime
-from aibrix.batch.job_entity import BatchJob, BatchJobError, BatchJobErrorCode
-from aibrix.batch.state import JobEntityManager
+from aibrix.batch.job_entity import (
+    BatchJob,
+    BatchJobError,
+    BatchJobErrorCode,
+    JobRuntimeRef,
+)
 from aibrix.context import InfrastructureContext
 from aibrix.logger import init_logger
 
@@ -64,51 +68,104 @@ class OctagramRuntime(RuntimeBase):
     def __init__(
         self,
         context: InfrastructureContext,
-        entity_manager: JobEntityManager,
         renderer: Optional[OctagramManifestRenderer] = None,
         ready_timeout_seconds: Optional[int] = None,
     ) -> None:
-        if entity_manager is None:
-            raise BatchJobError(
-                BatchJobErrorCode.INVALID_DRIVER,
-                "Octagram provider requires a job entity manager",
-            )
-        self._context = context
-        self._entity_manager = entity_manager
-        self._renderer = renderer or OctagramManifestRenderer(
-            context.template_registry, context.profile_registry
+        super().__init__(
+            context,
+            ready_timeout_seconds
+            or int(getattr(envs, "CONSUL_BATCH_DISCOVERY_TIMEOUT", 900)),
         )
+        self._renderer = renderer or self._build_renderer(context)
         self._httpx_client_wrapper = context.httpx_client_wrapper
         self._gateway_domain = self._resolve_gateway_domain()
-        self._ready_timeout_seconds: int = ready_timeout_seconds or int(
-            getattr(envs, "CONSUL_BATCH_DISCOVERY_TIMEOUT", 900)
+        self._active_handle: Optional[OctagramHandle] = None
+
+    @staticmethod
+    def _build_renderer(context: InfrastructureContext) -> OctagramManifestRenderer:
+        return OctagramManifestRenderer(
+            context.template_registry, context.profile_registry
         )
-        self._mgr_deleted_handler = entity_manager.on_job_deleted(
-            self._job_deleted_handler
+
+    def _get_runtime_key(self, job: BatchJob) -> str:
+        del job
+        return "tce"
+
+    def _get_runtime_owner_ref(self, job: BatchJob) -> Optional[str]:
+        del job
+        if self._active_handle is None:
+            return None
+        return (
+            f"{self._active_handle.cluster}/{self._active_handle.namespace}/"
+            f"{self._active_handle.workload_name}"
         )
-        self._active_job_id: Optional[str] = None
-        self._active_task: Optional[asyncio.Task[Any]] = None
-        self._delete_requested = asyncio.Event()
 
-    def cancelled(self) -> bool:
-        return self._delete_requested.is_set()
+    def _get_runtime_reconnect_payload(
+        self,
+        job: BatchJob,
+    ) -> Optional[dict[str, Any]]:
+        payload = super()._get_runtime_reconnect_payload(job) or {}
+        if self._active_handle is None:
+            return None if not payload else payload
+        payload.update(
+            {
+                "cluster": self._active_handle.cluster,
+                "namespace": self._active_handle.namespace,
+                "workloadName": self._active_handle.workload_name,
+                "modelName": self._active_handle.model_name,
+                "psm": self._active_handle.psm,
+                "baseUrl": self._active_handle.base_url,
+                "replicas": self._active_handle.replicas,
+            }
+        )
+        return payload
 
-    async def _job_deleted_handler(self, deleted_job: BatchJob) -> bool:
-        deleted_job_id = deleted_job.job_id
-        if deleted_job_id and deleted_job_id == self._active_job_id:
-            self._delete_requested.set()
-            if self._active_task is not None and not self._active_task.done():
-                self._active_task.cancel()
+    async def _reconnect(
+        self, job: BatchJob, job_id: str, execution: JobRuntimeRef
+    ) -> OctagramHandle | None:
+        del job
+        reconnect_payload = execution.reconnect_payload or {}
+        cluster = reconnect_payload.get("cluster")
+        namespace = reconnect_payload.get("namespace")
+        workload_name = reconnect_payload.get("workloadName")
+        model_name = reconnect_payload.get("modelName")
+        psm = reconnect_payload.get("psm")
+        base_url = reconnect_payload.get("baseUrl")
+        replicas = reconnect_payload.get("replicas")
+        if not (
+            isinstance(cluster, str)
+            and isinstance(namespace, str)
+            and namespace
+            and isinstance(workload_name, str)
+            and workload_name
+            and isinstance(model_name, str)
+            and model_name
+            and (psm is None or isinstance(psm, str))
+            and (base_url is None or isinstance(base_url, str))
+            and isinstance(replicas, int)
+        ):
+            return None
 
-        if self._mgr_deleted_handler is None:
-            return True
-        return await self._mgr_deleted_handler(deleted_job)
+        handle = OctagramHandle(
+            cluster=cluster,
+            namespace=namespace,
+            workload_name=workload_name,
+            model_name=model_name,
+            psm=psm,
+            base_url=base_url,
+            replicas=replicas,
+        )
+        self._active_handle = handle
+        logger.info(
+            "Reconnected Octagram runtime for batch job",
+            job_id=job_id,
+            cluster=handle.cluster,
+            namespace=handle.namespace,
+            workload=handle.workload_name,
+        )  # type: ignore[call-arg]
+        return handle
 
     async def _provision(self, job: BatchJob, job_id: str) -> OctagramHandle:
-        self._active_job_id = job_id
-        self._active_task = asyncio.current_task()
-        self._delete_requested.clear()
-
         if job.job_id is None:
             raise ValueError("job_id is required")
         if job.spec.aibrix is None:
@@ -151,6 +208,7 @@ class OctagramRuntime(RuntimeBase):
             base_url=self._resolve_direct_base_url(job),
             replicas=replicas,
         )
+        self._active_handle = handle
         await self._apply_workload(cluster, namespace, workload)
         logger.info(
             "Provisioned Octagram workload for batch job",
@@ -205,8 +263,7 @@ class OctagramRuntime(RuntimeBase):
             finally:
                 if handle.source is not None:
                     await handle.source.aclose()
-        self._active_job_id = None
-        self._active_task = None
+        self._active_handle = None
 
     async def _wait_for_model_discoverable(self, handle: OctagramHandle) -> None:
         model_discovery = self._context.model_discovery
@@ -224,11 +281,33 @@ class OctagramRuntime(RuntimeBase):
                 service_id=handle.psm,
                 timeout_seconds=self._ready_timeout_seconds,
             )  # type: ignore[call-arg]
-            await model_discovery.wait_for_model_endpoints(
-                served_model_name=handle.model_name,
-                timeout_seconds=float(self._ready_timeout_seconds),
-                service_id=handle.psm,
-            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + float(self._ready_timeout_seconds)
+            while True:
+                if self._stop_requested.is_set():
+                    raise asyncio.CancelledError
+                remaining_timeout_seconds = deadline - loop.time()
+                if remaining_timeout_seconds <= 0:
+                    raise TimeoutError(
+                        "Timed out waiting for Consul endpoints for model "
+                        f"'{handle.model_name}'"
+                    )
+                wait_slice_seconds = min(remaining_timeout_seconds, 1.0)
+                try:
+                    await model_discovery.wait_for_model_endpoints(
+                        served_model_name=handle.model_name,
+                        timeout_seconds=wait_slice_seconds,
+                        service_id=handle.psm,
+                        lookup_timeout_seconds=wait_slice_seconds,
+                        poll_interval_seconds=wait_slice_seconds,
+                    )
+                    return
+                except TimeoutError as ex:
+                    if loop.time() >= deadline:
+                        raise TimeoutError(
+                            "Timed out waiting for Consul endpoints for model "
+                            f"'{handle.model_name}'"
+                        ) from ex
         except TimeoutError as ex:
             raise BatchJobError(
                 code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
@@ -279,7 +358,7 @@ class OctagramRuntime(RuntimeBase):
             self._ready_timeout_seconds
         )
         while True:
-            if self._delete_requested.is_set():
+            if self._stop_requested.is_set():
                 raise asyncio.CancelledError
             try:
                 workload = await self._octagram_request(
@@ -555,9 +634,9 @@ class OctagramRuntime(RuntimeBase):
 
 register_runtime(
     "tce",
-    lambda *, context, entity_manager, **_: OctagramRuntime(context, entity_manager),
+    lambda *, context, **_: OctagramRuntime(context),
 )
 register_runtime(
     "Octagram",
-    lambda *, context, entity_manager, **_: OctagramRuntime(context, entity_manager),
+    lambda *, context, **_: OctagramRuntime(context),
 )

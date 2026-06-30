@@ -130,7 +130,15 @@ def create_storage(
     elif storage_type == StorageType.REDIS:
         from aibrix.storage.redis import RedisStorage
 
-        allowed = {"host", "port", "db", "password", "redis_psm", "require_check", "test"}
+        allowed = {
+            "host",
+            "port",
+            "db",
+            "password",
+            "redis_psm",
+            "require_check",
+            "test",
+        }
         client_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
 
         return RedisStorage(config=config, **client_kwargs)
