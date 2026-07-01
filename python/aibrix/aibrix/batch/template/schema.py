@@ -156,6 +156,7 @@ class Interconnect(str, Enum):
     NVLINK = "nvlink"
     PCIE = "pcie"
     INFINIBAND = "ib"
+    MLULINK = "mlulink"
 
 
 class AcceleratorSpec(_Strict):
