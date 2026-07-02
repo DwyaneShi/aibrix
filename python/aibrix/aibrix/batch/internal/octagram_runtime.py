@@ -96,7 +96,7 @@ class OctagramRuntime(RuntimeBase):
         if self._active_handle is None:
             return None
         return (
-            f"{self._active_handle.cluster}/{self._active_handle.namespace}/"
+            f"{self._active_handle.cluster}:{self._active_handle.namespace}:"
             f"{self._active_handle.workload_name}"
         )
 

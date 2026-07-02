@@ -21,6 +21,14 @@ import bytedredis
 from aibrix import envs
 from aibrix.client.redis import RedisPipeline
 
+# The packaged BytedRedis stack in our environment currently exposes the
+# redis-py 3.x ZADD surface: nx / xx / ch / incr are supported, while the
+# newer gt / lt flags are not present. A dedicated compatibility test probes
+# the installed bytedredis/redis-py signatures so this adapter stays aligned
+# with the real client surface instead of rejecting supported options or
+# forwarding unsupported ones.
+_SUPPORTED_ZADD_OPTIONS: frozenset[str] = frozenset({"nx", "xx", "ch", "incr"})
+
 
 def _require_unsupported_set_options(**kwargs: Any) -> None:
     unsupported = {
@@ -39,7 +47,9 @@ def _require_unsupported_zadd_options(**kwargs: Any) -> None:
     unsupported = {
         key: value
         for key, value in kwargs.items()
-        if value is not None and value is not False
+        if key not in _SUPPORTED_ZADD_OPTIONS
+        and value is not None
+        and value is not False
     }
     if unsupported:
         raise NotImplementedError(
@@ -106,7 +116,7 @@ class _AsyncBytedRedisPipeline:
             gt=gt,
             lt=lt,
         )
-        return self._pipeline.zadd(name, mapping)
+        return self._pipeline.zadd(name, mapping, nx=nx, xx=xx, ch=ch, incr=incr)
 
     def sadd(
         self,
@@ -234,7 +244,7 @@ class _AsyncBytedRedisClient:
             gt=gt,
             lt=lt,
         )
-        return await self._call("zadd", name, mapping)
+        return await self._call("zadd", name, mapping, nx=nx, xx=xx, ch=ch, incr=incr)
 
     async def zrange(
         self,

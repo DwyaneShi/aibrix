@@ -390,7 +390,7 @@ async def test_octagram_runtime_builds_execution_ref_with_current_payload_shape(
 
     assert execution is not None
     assert execution.driver_type == "tce"
-    assert execution.owner_ref == "cluster-a/default/batch-job-1234"
+    assert execution.owner_ref == "cluster-a:default:batch-job-1234"
     assert execution.reconnect_payload == {
         "cluster": "cluster-a",
         "namespace": "default",
@@ -414,7 +414,7 @@ async def test_octagram_runtime_reconnect_accepts_current_payload_keys(
         job.job_id,
         JobRuntimeRef(
             driverType="tce",
-            ownerRef="cluster-a/default/batch-job-1234",
+            ownerRef="cluster-a:default:batch-job-1234",
             reconnectPayload={
                 "cluster": "cluster-a",
                 "namespace": "default",
