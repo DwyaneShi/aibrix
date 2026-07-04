@@ -59,7 +59,7 @@ func (b *tcePlannerBackend) ValidateRequest(req *plannerapi.EnqueueRequest) erro
 func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueRequest) (spec rmtypes.ResourceProvisionSpec, err error) {
 	gpuType, gpusPerReplica, err := decodeAcceleratorFromTemplate(req.ModelTemplate)
 	if err != nil {
-		return
+		return spec, err
 	}
 
 	// Default and minimum time window is 1 hour
@@ -86,7 +86,7 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 			EndTime:   &endTime,
 		},
 	}
-	return
+	return spec, nil
 }
 
 func (b *tcePlannerBackend) LogProvisionResponse(jobID string, prov *rmtypes.ProvisionResult, spec rmtypes.ResourceProvisionSpec) {

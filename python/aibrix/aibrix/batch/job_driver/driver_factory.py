@@ -14,6 +14,9 @@
 
 from typing import Optional
 
+import aibrix.batch.internal.octagram_deployment_detail  # noqa: F401,E402  Octagram/TCE
+import aibrix.batch.internal.octagram_runtime  # noqa: F401,E402  Octagram/TCE
+
 # Import for side effects: each provisioning backend registers its Runtime
 # factory under its RuntimeTarget key. External / noop register from
 # runtime.base. (One import per provider module.)
@@ -21,7 +24,6 @@ import aibrix.batch.job_driver.runtime.k8s_deployment  # noqa: F401,E402  Kubern
 import aibrix.batch.job_driver.runtime.k8s_job  # noqa: F401,E402  KubernetesJob
 import aibrix.batch.job_driver.runtime.lambda_cloud  # noqa: F401,E402  LambdaCloud
 import aibrix.batch.job_driver.runtime.runpod  # noqa: F401,E402  RunPod
-import aibrix.batch.internal.octagram_runtime  # noqa: F401,E402  Octagram/TCE
 from aibrix.batch.client import EndpointSource
 from aibrix.batch.job_driver.base import BaseJobDriver
 from aibrix.batch.job_driver.driver import JobDriver

@@ -25,7 +25,9 @@ import aibrix.batch.constant as constant
 from aibrix import envs
 from aibrix.batch.client import EndpointSource
 from aibrix.batch.client.sources import DiscoveryEndpointSource, GatewayEndpointSource
+from aibrix.batch.internal.config import REGION_DOMAINS
 from aibrix.batch.internal.octagram_renderer import OctagramManifestRenderer
+from aibrix.batch.internal.octagram_utils import get_job_name, parse_endpoint_cluster
 from aibrix.batch.job_driver.runtime import (
     RUNTIME_WAIT_MODE_PROVISION,
     RUNTIME_WAIT_MODE_RECONNECT,
@@ -45,13 +47,6 @@ from aibrix.logger import init_logger
 logger = init_logger(__name__)
 
 _DEFAULT_NAMESPACE = "default"
-_REGION_DOMAINS = {
-    "CN": "https://octagram-gateway.byted.org",
-    "US": "https://octagram-gateway-us.byted.org",
-    "I18N": "https://octagram-gateway-i18n.byted.org",
-    "EU": "https://octagram-gateway-eu.tiktoke.org",
-    "EUTTP": "https://octagram-gateway-eu.tiktoke.org",
-}
 
 
 @dataclass
@@ -192,8 +187,14 @@ class OctagramRuntime(RuntimeBase):
             )
 
         resource_detail = resource_details[0]
-        workload = self._renderer.render(job.job_id, job.spec, resource_detail)
-        cluster = resource_detail.endpoint_cluster or ""
+        job_name = get_job_name(job)
+        workload = self._renderer.render(
+            job.job_id, job_name, job.spec, resource_detail
+        )
+        _, idc, physical_cluster, _ = parse_endpoint_cluster(
+            resource_detail.endpoint_cluster
+        )
+        cluster = f"{physical_cluster}-{idc}"
         namespace = workload["metadata"].get("namespace", _DEFAULT_NAMESPACE)
         workload_name = workload["metadata"]["name"]
         model_name = workload["metadata"]["labels"]["model.aibrix.ai/name"]
@@ -590,11 +591,11 @@ class OctagramRuntime(RuntimeBase):
         if isinstance(configured, str) and configured:
             return configured.rstrip("/")
         region = getattr(envs, "REGION", "CN").upper().replace("-", "").replace("_", "")
-        if region not in _REGION_DOMAINS:
+        if region not in REGION_DOMAINS:
             raise ValueError(
-                f"Unsupported REGION '{region}', expected one of {sorted(_REGION_DOMAINS)}"
+                f"Unsupported REGION '{region}', expected one of {sorted(REGION_DOMAINS)}"
             )
-        return _REGION_DOMAINS[region]
+        return REGION_DOMAINS[region].octagram
 
     def _workload_path(self, cluster: str, namespace: str, workload_name: str) -> str:
         return (

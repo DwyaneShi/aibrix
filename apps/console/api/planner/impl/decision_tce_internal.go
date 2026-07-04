@@ -88,10 +88,7 @@ func populateTCEDetails(details *plannerclient.ResourceDetails, resource *planne
 	}
 	seg := groups[0].AllocationSegments[0]
 
-	details.EndpointCluster = seg.Region.PhysicalCluster
-	if seg.Region.PhysicalCluster != "" && seg.Region.Dc != "" {
-		details.EndpointCluster = seg.Region.PhysicalCluster + "-" + seg.Region.Dc
-	}
+	details.EndpointCluster = seg.Region.String()
 	details.LogicalCluster = seg.Region.LogicalCluster
 	if seg.CommitInfo != nil && seg.CommitInfo.ResourcePoolName != nil {
 		details.ResourcePoolName = trimResourcePoolSuffix(*seg.CommitInfo.ResourcePoolName)

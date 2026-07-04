@@ -3,9 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from math import ceil
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 from aibrix import envs
+from aibrix.batch.internal.octagram_utils import parse_endpoint_cluster
 from aibrix.batch.job_entity import BatchJobSpec, ResourceDetail, ResourceRequirement
 from aibrix.batch.manifest.engine_adapter import build_engine_args
 from aibrix.batch.manifest.renderer import _RendererSupport
@@ -207,6 +208,7 @@ class OctagramManifestRenderer(_RendererSupport):
     def render(
         self,
         job_id: str,
+        job_name: str,
         spec: BatchJobSpec,
         providerSpec: ResourceDetail,
         namespace: str = _DEFAULT_NAMESPACE,
@@ -221,8 +223,6 @@ class OctagramManifestRenderer(_RendererSupport):
         # layers can assume they're working with k8s + dedicated + supported endpoint.
         self._validate_template(template, spec.endpoint)
 
-        # Construct dynamic values
-        job_name = f"batch-{template.name}-{job_id[:8]}".lower()
         container_name = job_name
         resource = providerSpec.resource
         # Short-term: until the deployment template carries explicit cpu/memory,
@@ -237,11 +237,11 @@ class OctagramManifestRenderer(_RendererSupport):
         model_name = infer_model_name(template.spec.model_source.uri).lower()
         served_model_name = f"{job_name}-{model_name}"
         console_job_id = spec.aibrix.job_id if spec.aibrix else None
-        cluster_name, idc_name = self._parse_endpoint_cluster(
+        _, idc, physical_cluster, _ = parse_endpoint_cluster(
             providerSpec.endpoint_cluster
         )
-        self.cluster_name = cluster_name
-        self.idc_name = idc_name
+        self.cluster_name = physical_cluster
+        self.idc_name = idc
 
         # Layered composition.
         manifest = self._system_base(
@@ -256,13 +256,14 @@ class OctagramManifestRenderer(_RendererSupport):
         self._apply_deployment_meta(manifest, providerSpec, resource)
         self._apply_strategy(manifest, resource)
         self._apply_pod_base(
+            job_name=job_name,
             manifest=manifest,
             template=template,
             detail=providerSpec,
             resource=resource,
             container_name=container_name,
-            cluster_name=cluster_name,
-            idc_name=idc_name,
+            cluster_name=physical_cluster,
+            idc_name=idc,
             tce_env=tce_env,
             tce_stage=tce_stage,
             tce_primary_port=tce_primary_port,
@@ -413,6 +414,7 @@ class OctagramManifestRenderer(_RendererSupport):
 
     def _apply_pod_base(
         self,
+        job_name: str,
         manifest: Dict[str, Any],
         template: ModelDeploymentTemplate,
         detail: ResourceDetail,
@@ -449,6 +451,7 @@ class OctagramManifestRenderer(_RendererSupport):
                     "imagePullPolicy": "IfNotPresent",
                     "isMainContainer": True,
                     "env": self._container_env(
+                        job_name=job_name,
                         manifest=manifest,
                         template=template,
                         cluster_name=cluster_name,
@@ -666,6 +669,7 @@ class OctagramManifestRenderer(_RendererSupport):
 
     def _container_env(
         self,
+        job_name: str,
         manifest: Dict[str, Any],
         template: ModelDeploymentTemplate,
         cluster_name: str,
@@ -695,6 +699,8 @@ class OctagramManifestRenderer(_RendererSupport):
             {"name": "TCE_PHYSICAL_CLUSTER", "value": cluster_name},
             {"name": "TCE_PRIMARY_PORT", "value": tce_primary_port},
             {"name": "TCE_STAGE", "value": tce_stage},
+            # we also include BERNARD_SERVICE_ID to leverage bernard facilities
+            {"name": "BERNARD_SERVICE_ID", "value": job_name},
         ]
         psm = manifest["metadata"]["labels"].get("psm")
         if psm:
@@ -702,6 +708,7 @@ class OctagramManifestRenderer(_RendererSupport):
                 [
                     {"name": "LOAD_SERVICE_PSM", "value": psm},
                     {"name": "TCE_PSM", "value": psm},
+                    {"name": "AIBRIX_PSM", "value": psm},
                 ]
             )
         return env
@@ -738,15 +745,3 @@ class OctagramManifestRenderer(_RendererSupport):
                 "limit": resource.memory,
             }
         return resources
-
-    def _parse_endpoint_cluster(
-        self, endpoint_cluster: Optional[str]
-    ) -> Tuple[str, str]:
-        if not endpoint_cluster:
-            return "", ""
-        # Preserve the original casing for manifest/env fields. Consul-specific
-        # normalization happens later in the runtime when composing discovery IDs.
-        parts = endpoint_cluster.rsplit("-", 1)
-        if len(parts) == 1:
-            return parts[0], ""
-        return parts[0], parts[1]
