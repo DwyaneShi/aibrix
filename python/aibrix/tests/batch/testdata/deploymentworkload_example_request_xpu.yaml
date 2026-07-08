@@ -39,7 +39,7 @@ spec:
     annotations:
       bytedance.quota.salemode: scheduled
       deployment.tce.kubernetes.io/xpu-type: MLU590-M9DK
-      deployment.tce.kubernetes.io/requestGpuUserDemand: "1"
+      deployment.tce.kubernetes.io/requestGpuUserDemand: "2"
       queue-name: compute-0-zc-federationgpu-dandelion.ai.mix-default
       vpa.katalyst.kubewharf.io/enable: "true"
       deployment.tce.kubernetes.io/requestCpuUserDemand: "16"
@@ -65,7 +65,7 @@ spec:
       godel.bytedance.com/without-preemption-protection: "true"
       pod.kubernetes.io/explicit.deletion: "true"
       pod.tce.kubernetes.io/autoport: "1"
-      pod.tce.kubernetes.io/requestGpuUserDemand: "1"
+      pod.tce.kubernetes.io/requestGpuUserDemand: "2"
       queue-name: compute-0-zc-federationgpu-dandelion.ai.mix-default
       pod.tce.kubernetes.io/requestCpuUserDemand: "16"
       pod.tce.kubernetes.io/requestMemUserDemand: 96Gi
@@ -84,15 +84,9 @@ spec:
           - name: AIBRIX_SERVED_MODEL_NAME
             value: batch-tce-vllm-6281d2a8-model_store_open_source_model
           - name: EXTRA_PARAMETERS
-            value: --gpu-memory-utilization 0.85
-          - name: TP_SIZE
-            value: "1"
-          - name: PP_SIZE
-            value: "1"
-          - name: DP_SIZE
-            value: "1"
+            value: --tensor-parallel-size 2 --gpu-memory-utilization 0.85
           - name: MY_GPU_REQUEST
-            value: "1"
+            value: "2"
           - name: TCE_CLUSTER
             value: Federation
           - name: TCE_ENV
@@ -134,8 +128,8 @@ spec:
           extended:
             - name: bytedance.com/xpu
               requestLimit:
-                request: "1"
-                limit: "1"
+                request: "2"
+                limit: "2"
           cpu:
             request: "16"
             limit: "16"

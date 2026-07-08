@@ -26,7 +26,13 @@ from aibrix import envs
 from aibrix.batch.client import EndpointSource
 from aibrix.batch.client.sources import DiscoveryEndpointSource, GatewayEndpointSource
 from aibrix.batch.internal.octagram_renderer import OctagramManifestRenderer
-from aibrix.batch.job_driver.runtime import Endpoint, RuntimeBase, register_runtime
+from aibrix.batch.job_driver.runtime import (
+    RUNTIME_WAIT_MODE_PROVISION,
+    RUNTIME_WAIT_MODE_RECONNECT,
+    Endpoint,
+    RuntimeBase,
+    register_runtime,
+)
 from aibrix.batch.job_entity import (
     BatchJob,
     BatchJobError,
@@ -64,6 +70,7 @@ class OctagramRuntime(RuntimeBase):
     """Provision a TCE DeploymentWorkload, discover endpoints, then tear it down."""
 
     provisions = True
+    session_liveness_failure_threshold = 1
 
     def __init__(
         self,
@@ -79,6 +86,10 @@ class OctagramRuntime(RuntimeBase):
         self._renderer = renderer or self._build_renderer(context)
         self._httpx_client_wrapper = context.httpx_client_wrapper
         self._gateway_domain = self._resolve_gateway_domain()
+        # TODO: put env in internal.env, see envs usage convection.
+        self._workload_not_found_grace_seconds = (
+            envs.OCTAGRAM_WORKLOAD_NOT_FOUND_GRACE_SECONDS
+        )
         self._active_handle: Optional[OctagramHandle] = None
 
     @staticmethod
@@ -222,15 +233,29 @@ class OctagramRuntime(RuntimeBase):
         )  # type: ignore[call-arg]
         return handle
 
-    async def _wait_ready(self, handle: OctagramHandle) -> None:
+    async def _wait_ready(
+        self,
+        handle: OctagramHandle,
+        wait_mode: str = RUNTIME_WAIT_MODE_PROVISION,
+    ) -> None:
         await self._wait_for_workload_ready(
             cluster=handle.cluster,
             namespace=handle.namespace,
             workload_name=handle.workload_name,
             replicas=handle.replicas,
+            wait_mode=wait_mode,
         )
         if handle.base_url is None:
             await self._wait_for_model_discoverable(handle)
+
+    async def _check_liveness(self, handle: OctagramHandle) -> None:
+        await self._wait_for_workload_ready(
+            cluster=handle.cluster,
+            namespace=handle.namespace,
+            workload_name=handle.workload_name,
+            replicas=handle.replicas,
+            wait_mode=RUNTIME_WAIT_MODE_RECONNECT,
+        )
 
     async def _connect(self, handle: OctagramHandle) -> Endpoint:
         if handle.base_url is not None:
@@ -286,6 +311,13 @@ class OctagramRuntime(RuntimeBase):
             while True:
                 if self._stop_requested.is_set():
                     raise asyncio.CancelledError
+                await self._wait_for_workload_ready(
+                    cluster=handle.cluster,
+                    namespace=handle.namespace,
+                    workload_name=handle.workload_name,
+                    replicas=handle.replicas,
+                    wait_mode=RUNTIME_WAIT_MODE_RECONNECT,
+                )
                 remaining_timeout_seconds = deadline - loop.time()
                 if remaining_timeout_seconds <= 0:
                     raise TimeoutError(
@@ -338,6 +370,14 @@ class OctagramRuntime(RuntimeBase):
                 json=workload,
             )
         except httpx.HTTPStatusError as ex:
+            if ex.response.status_code == 409:
+                logger.info(
+                    "Octagram workload create returned 409; treating as already exists",
+                    cluster=cluster,
+                    namespace=namespace,
+                    workload=workload["metadata"]["name"],
+                )  # type: ignore[call-arg]
+                return
             raise BatchJobError(
                 code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
                 message=(
@@ -352,11 +392,21 @@ class OctagramRuntime(RuntimeBase):
             )
 
     async def _wait_for_workload_ready(
-        self, cluster: str, namespace: str, workload_name: str, replicas: int
+        self,
+        cluster: str,
+        namespace: str,
+        workload_name: str,
+        replicas: int,
+        wait_mode: str = RUNTIME_WAIT_MODE_RECONNECT,
     ) -> None:
-        deadline = asyncio.get_running_loop().time() + float(
-            self._ready_timeout_seconds
-        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + float(self._ready_timeout_seconds)
+        missing_deadline: Optional[float] = None
+        if wait_mode == RUNTIME_WAIT_MODE_PROVISION:
+            missing_deadline = min(
+                deadline,
+                loop.time() + float(self._workload_not_found_grace_seconds),
+            )
         while True:
             if self._stop_requested.is_set():
                 raise asyncio.CancelledError
@@ -366,6 +416,24 @@ class OctagramRuntime(RuntimeBase):
                     self._workload_path(cluster, namespace, workload_name),
                 )
             except httpx.HTTPStatusError as ex:
+                # Octagram has read-after-write inconsistency problem.
+                # So we treat 404 as a temporary error and simply ignore for a timeout.
+                if (
+                    ex.response.status_code == 404
+                    and wait_mode == RUNTIME_WAIT_MODE_PROVISION
+                    and missing_deadline is not None
+                    and loop.time() < missing_deadline
+                ):
+                    logger.info(
+                        "Octagram workload status check returned 404 during provision; retrying",
+                        cluster=cluster,
+                        namespace=namespace,
+                        workload=workload_name,
+                        grace_seconds=self._workload_not_found_grace_seconds,
+                    )  # type: ignore[call-arg]
+                    await asyncio.sleep(1)
+                    continue
+
                 error_code = BatchJobErrorCode.RESOURCE_CREATION_ERROR
                 if ex.response.status_code == 404:
                     error_code = BatchJobErrorCode.RESOURCE_NOTFOUND_ERROR

@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional, cast
 
@@ -35,7 +37,12 @@ from aibrix.batch.job_entity import (
     TypeMeta,
 )
 from aibrix.batch.state import JobEntityManager
-from aibrix.context import InfrastructureContext
+from aibrix.context import (
+    InfrastructureContext,
+    ModelDiscovery,
+    ModelEndpoint,
+    ModelLookupSnapshot,
+)
 from tests.batch.internal.octagram_backend import FakeOctagramRenderer
 
 
@@ -91,6 +98,64 @@ class FakeAsyncClient:
 class FakeHttpxClientWrapper:
     def __init__(self, responses: dict[str, list[httpx.Response | Exception]]) -> None:
         self.async_client = FakeAsyncClient(responses)
+
+
+@dataclass
+class FakeModelEndpoint(ModelEndpoint):
+    base_url: str = "http://model-endpoint.example.test"
+
+
+@dataclass
+class FakeModelLookupSnapshot(ModelLookupSnapshot):
+    version: int = 1
+    endpoints: list[ModelEndpoint] = field(
+        default_factory=lambda: [FakeModelEndpoint()]
+    )
+
+
+class FakeModelDiscovery:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def lookup(
+        self,
+        service_id: Optional[str] = None,
+        filter_tags: Optional[dict[str, str]] = None,
+        lookup_timeout_seconds: Optional[float] = None,
+    ) -> ModelLookupSnapshot:
+        del service_id, filter_tags, lookup_timeout_seconds
+        return FakeModelLookupSnapshot()
+
+    async def discover_model_endpoints(
+        self,
+        served_model_name: str,
+        service_id: Optional[str] = None,
+        filter_tags: Optional[dict[str, str]] = None,
+        lookup_timeout_seconds: Optional[float] = None,
+    ) -> ModelLookupSnapshot:
+        del served_model_name, service_id, filter_tags, lookup_timeout_seconds
+        return FakeModelLookupSnapshot()
+
+    async def wait_for_model_endpoints(
+        self,
+        served_model_name: str,
+        timeout_seconds: float,
+        service_id: Optional[str] = None,
+        filter_tags: Optional[dict[str, str]] = None,
+        lookup_timeout_seconds: Optional[float] = None,
+        poll_interval_seconds: float = 1.0,
+    ) -> object:
+        self.calls.append(
+            {
+                "served_model_name": served_model_name,
+                "timeout_seconds": timeout_seconds,
+                "service_id": service_id,
+                "filter_tags": filter_tags,
+                "lookup_timeout_seconds": lookup_timeout_seconds,
+                "poll_interval_seconds": poll_interval_seconds,
+            }
+        )
+        return FakeModelLookupSnapshot()
 
 
 def _response(
@@ -174,6 +239,15 @@ def _make_job(job_id: str = "job-123456789abc") -> BatchJob:
 
 
 @pytest.mark.asyncio
+async def test_octagram_runtime_uses_immediate_liveness_failure_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(FakeHttpxClientWrapper({"GET": []}), monkeypatch)
+
+    assert runtime.session_liveness_failure_threshold == 1
+
+
+@pytest.mark.asyncio
 async def test_delete_workload_falls_back_to_scale_zero_on_non_404_delete_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,11 +271,16 @@ async def test_delete_workload_falls_back_to_scale_zero_on_non_404_delete_error(
     wait_calls: list[tuple[str, str, str, int]] = []
 
     async def _wait_ready(
-        cluster: str, namespace: str, workload_name: str, replicas: int
+        cluster: str,
+        namespace: str,
+        workload_name: str,
+        replicas: int,
+        wait_mode: str = "reconnect",
     ) -> None:
+        del wait_mode
         wait_calls.append((cluster, namespace, workload_name, replicas))
 
-    runtime._wait_for_workload_ready = _wait_ready  # type: ignore[method-assign]
+    monkeypatch.setattr(runtime, "_wait_for_workload_ready", _wait_ready)
 
     await runtime._delete_workload(handle)
 
@@ -281,15 +360,19 @@ async def test_delete_workload_raises_when_scaled_workload_never_resyncs(
     runtime = _runtime(wrapper, monkeypatch)
 
     async def _wait_ready(
-        cluster: str, namespace: str, workload_name: str, replicas: int
+        cluster: str,
+        namespace: str,
+        workload_name: str,
+        replicas: int,
+        wait_mode: str = "reconnect",
     ) -> None:
-        del cluster, namespace, workload_name, replicas
+        del cluster, namespace, workload_name, replicas, wait_mode
         raise BatchJobError(
             code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
             message="Timed out waiting for octagram workload to become ready",
         )
 
-    runtime._wait_for_workload_ready = _wait_ready  # type: ignore[method-assign]
+    monkeypatch.setattr(runtime, "_wait_for_workload_ready", _wait_ready)
 
     with pytest.raises(BatchJobError) as exc_info:
         await runtime._delete_workload(handle)
@@ -362,10 +445,179 @@ async def test_wait_for_workload_ready_404_raises_not_found_error(
             namespace="default",
             workload_name="batch-job-abcd1234",
             replicas=1,
+            wait_mode="reconnect",
         )
 
     assert exc_info.value.code == BatchJobErrorCode.RESOURCE_NOTFOUND_ERROR.value
     assert "Octagram workload status check failed (404): gone" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_wait_for_workload_ready_provision_retries_404_until_workload_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-abcd1234"
+    )
+    wrapper = FakeHttpxClientWrapper(
+        {
+            "GET": [
+                _response("GET", base_url, 404, text="gone"),
+                _response(
+                    "GET",
+                    base_url,
+                    200,
+                    payload={
+                        "data": {
+                            "status": {
+                                "phase": "synced",
+                                "replicasStatuses": [{"available": 1}],
+                            }
+                        }
+                    },
+                ),
+            ]
+        }
+    )
+    runtime = _runtime(wrapper, monkeypatch)
+
+    async def _sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.asyncio.sleep", _sleep)
+
+    await runtime._wait_for_workload_ready(
+        cluster="cluster-a",
+        namespace="default",
+        workload_name="batch-job-abcd1234",
+        replicas=1,
+        wait_mode="provision",
+    )
+
+    assert wrapper.async_client.calls == [("GET", base_url), ("GET", base_url)]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_workload_ready_provision_404_respects_grace_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-abcd1234"
+    )
+    wrapper = FakeHttpxClientWrapper(
+        {
+            "GET": [
+                _response("GET", base_url, 404, text="gone"),
+                _response("GET", base_url, 404, text="gone"),
+                _response("GET", base_url, 404, text="gone"),
+                _response("GET", base_url, 404, text="gone"),
+            ]
+        }
+    )
+    runtime = _runtime(wrapper, monkeypatch)
+    cast(Any, runtime)._workload_not_found_grace_seconds = 0.2
+    original_sleep = asyncio.sleep
+
+    async def _sleep(_: float) -> None:
+        await original_sleep(0.1)
+
+    monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.asyncio.sleep", _sleep)
+
+    with pytest.raises(BatchJobError) as exc_info:
+        await runtime._wait_for_workload_ready(
+            cluster="cluster-a",
+            namespace="default",
+            workload_name="batch-job-abcd1234",
+            replicas=1,
+            wait_mode="provision",
+        )
+
+    assert exc_info.value.code == BatchJobErrorCode.RESOURCE_NOTFOUND_ERROR.value
+    assert "Octagram workload status check failed (404): gone" in exc_info.value.message
+    assert len(wrapper.async_client.calls) >= 2
+
+
+@pytest.mark.asyncio
+async def test_wait_for_model_discoverable_checks_workload_existence_each_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(FakeHttpxClientWrapper({"GET": []}), monkeypatch)
+    model_discovery = FakeModelDiscovery()
+    runtime._context.model_discovery = cast(ModelDiscovery, model_discovery)
+    workload_wait_calls: list[tuple[str, str, str, int, str]] = []
+
+    async def _wait_for_workload_ready(
+        cluster: str,
+        namespace: str,
+        workload_name: str,
+        replicas: int,
+        wait_mode: str = "reconnect",
+    ) -> None:
+        workload_wait_calls.append(
+            (cluster, namespace, workload_name, replicas, wait_mode)
+        )
+
+    runtime._wait_for_workload_ready = _wait_for_workload_ready  # type: ignore[method-assign]
+
+    await runtime._wait_for_model_discoverable(_handle())
+
+    assert workload_wait_calls == [
+        ("cluster-a", "default", "batch-job-abcd1234", 1, "reconnect")
+    ]
+    assert len(model_discovery.calls) == 1
+    assert model_discovery.calls[0]["served_model_name"] == "served-model"
+
+
+@pytest.mark.asyncio
+async def test_wait_ready_forwards_wait_mode_to_workload_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(FakeHttpxClientWrapper({"GET": []}), monkeypatch)
+    readiness_wait_modes: list[str] = []
+
+    async def _wait_for_workload_ready(
+        cluster: str,
+        namespace: str,
+        workload_name: str,
+        replicas: int,
+        wait_mode: str = "reconnect",
+    ) -> None:
+        del cluster, namespace, workload_name, replicas
+        readiness_wait_modes.append(wait_mode)
+
+    async def _wait_for_model_discoverable(handle: OctagramHandle) -> None:
+        del handle
+
+    runtime._wait_for_workload_ready = _wait_for_workload_ready  # type: ignore[method-assign]
+    runtime._wait_for_model_discoverable = _wait_for_model_discoverable  # type: ignore[method-assign]
+
+    await runtime._wait_ready(_handle(), wait_mode="reconnect")
+
+    assert readiness_wait_modes == ["reconnect"]
+
+
+@pytest.mark.asyncio
+async def test_apply_workload_409_is_treated_as_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-abcd1234"
+    )
+    wrapper = FakeHttpxClientWrapper(
+        {"POST": [_response("POST", base_url, 409, text="already exists")]}
+    )
+    runtime = _runtime(wrapper, monkeypatch)
+
+    await runtime._apply_workload(
+        "cluster-a",
+        "default",
+        {"metadata": {"name": "batch-job-abcd1234"}},
+    )
+
+    assert wrapper.async_client.calls == [("POST", base_url)]
 
 
 @pytest.mark.asyncio

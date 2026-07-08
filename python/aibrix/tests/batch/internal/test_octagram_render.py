@@ -27,7 +27,7 @@ from aibrix import envs
 from aibrix.batch.internal.octagram_renderer import OctagramManifestRenderer
 from aibrix.batch.job_entity import BatchJobSpec, ResourceDetail, ResourceRequirement
 
-_TESTDATA_DIR = Path(__file__).parent / "testdata"
+_TESTDATA_DIR = Path(__file__).resolve().parents[1] / "testdata"
 _FIXED_NOW = datetime(2026, 5, 22, 18, 0, tzinfo=timezone.utc)
 
 
@@ -48,11 +48,11 @@ def _template_spec(service_id: str | None = "inf.aibrix.platform"):
         },
         "accelerator": {
             "type": "NVIDIA-A10",
-            "count": 1,
+            "count": 2,
             "interconnect": "pcie",
             "vram_gb": 24,
         },
-        "parallelism": {"tp": 1, "pp": 1, "dp": 1},
+        "parallelism": {"tp": 2, "pp": 1, "dp": 1},
         "engine_args": {"gpu_memory_utilization": 0.85},
         "supported_endpoints": ["/v1/chat/completions"],
         "deployment_mode": "dedicated",
@@ -110,6 +110,7 @@ def _request_snapshot_resource_detail() -> ResourceDetail:
         ),
         logical_cluster="non-standard-g19",
         accelerator_type="NVIDIA-A30",
+        accelerator_count=2,
     )
 
 
@@ -120,6 +121,7 @@ def _request_snapshot_xpu_resource_detail() -> ResourceDetail:
         logical_cluster="dandelion-ai-mix",
         accelerator_type="MLU590-M9DK",
         accelerator_category="xpu",
+        accelerator_count=2,
         cpu="16",
         memory="96Gi",
     )
@@ -278,7 +280,10 @@ def test_octagram_manifest_renderer_renders_expected_tce_fields():
 
     env = _rendered_env(rendered)
     assert env["MODEL_NAME"] == "model_store_open_source_model"
-    assert env["EXTRA_PARAMETERS"] == "--gpu-memory-utilization 0.85"
+    assert (
+        env["EXTRA_PARAMETERS"]
+        == "--tensor-parallel-size 2 --gpu-memory-utilization 0.85"
+    )
     assert env["TCE_CLUSTER"] == "Echo"
     assert env["TCE_INTERNAL_IDC"] == "HL"
     assert env["LOAD_SERVICE_PSM"] == "inf.aibrix.platform"

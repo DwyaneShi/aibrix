@@ -28,7 +28,7 @@ spec:
       # "deployment.tce.kubernetes.io/overCommitRatioMemory": "1.500",
       deployment.tce.kubernetes.io/requestCpuUserDemand: "11" # spec.aibrix.resource_allocation.resource_details[].resource[].cpu if available
       deployment.tce.kubernetes.io/requestMemUserDemand: 125Gi # spec.aibrix.resource_allocation.resource_details[].resource[].memory if available
-      deployment.tce.kubernetes.io/requestGpuUserDemand: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
+      deployment.tce.kubernetes.io/requestGpuUserDemand: "2" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
       # TODO: Unsupported
       # "pod.tce.kubernetes.io/netcls": "481071596",
       queue-name: compute-3530-yg-federationgpu-non.standard.g19-default-guarantee # spec.aibrix.resource_allocation.resource_details[].resourcePoolName
@@ -124,7 +124,7 @@ spec:
       # pod.tce.kubernetes.io/netcls-version: "v2"
       pod.tce.kubernetes.io/requestCpuUserDemand: "11" # spec.aibrix.resource_allocation.resource_details[].resource[].cpu if available
       pod.tce.kubernetes.io/requestMemUserDemand: 125Gi # spec.aibrix.resource_allocation.resource_details[].resource[].memory if available
-      pod.tce.kubernetes.io/requestGpuUserDemand: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
+      pod.tce.kubernetes.io/requestGpuUserDemand: "2" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
       queue-name: compute-3530-yg-federationgpu-non.standard.g19-default-guarantee # spec.aibrix.resource_allocation.resource_details[].resourcePoolName
     containers:
       - name: batch-tce-vllm-6281d2a8
@@ -141,13 +141,14 @@ spec:
           - name: AIBRIX_SERVED_MODEL_NAME
             value: batch-tce-vllm-6281d2a8-model_store_open_source_model # metadata.labels["model.aibrix.ai/name"]
           - name: EXTRA_PARAMETERS
-            value: --gpu-memory-utilization 0.85 # template.engine.serve_args
-          - name: TP_SIZE
-            value: "1" # template.engine.parallelism.tp if available, default 1
-          - name: PP_SIZE
-            value: "1" # template.engine.parallelism.pp if available, default 1
-          - name: DP_SIZE
-            value: "1" # template.engine.parallelism.dp if available, default 1
+            value: --tensor-parallel-size 2 --gpu-memory-utilization 0.85 # template.engine
+          # No need to specifiy here. Will added to LLM Engine command line according to template.engine.parallelism
+          # - name: TP_SIZE
+          #   value: "1" # template.engine.parallelism.tp if available, default 1
+          # - name: PP_SIZE
+          #   value: "1" # template.engine.parallelism.pp if available, default 1
+          # - name: DP_SIZE
+          #   value: "1" # template.engine.parallelism.dp if available, default 1
           # Auto-added by Octagram
           # - name: MY_CPU_LIMIT
           #   valueFrom:
@@ -162,7 +163,7 @@ spec:
           #       divisor: "0"
           #       resource: requests.cpu
           - name: MY_GPU_REQUEST
-            value: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
+            value: "2" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
           # Auto-added by Octagram
           # - name: MY_HOST_IP
           #   valueFrom:
@@ -272,8 +273,8 @@ spec:
           # This is defined by spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCategory
           # make sure octagram also support "xpu" and "npu"
           gpu:
-            request: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
-            limit: "1" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
+            request: "2" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
+            limit: "2" # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorCount
         volumeMounts:
           # Added by VolumeTreatment
           # - name: bytefuse-aibrix-models

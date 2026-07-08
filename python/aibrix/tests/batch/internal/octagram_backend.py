@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -7,6 +8,8 @@ import httpx
 
 import aibrix.batch.internal.octagram_runtime as octagram_runtime_module
 from aibrix import envs
+from aibrix.batch.client.channel import EchoChannel
+from aibrix.batch.client.errors import InferenceError, InferenceErrorCode
 from aibrix.batch.client.sources import NoopEndpointSource
 from aibrix.batch.job_driver.runtime import Endpoint
 
@@ -14,9 +17,43 @@ ORIGINAL_OCTAGRAM_TEARDOWN = octagram_runtime_module.OctagramRuntime._teardown
 
 
 class FastOctagramEndpointSource(NoopEndpointSource):
-    def __init__(self, context):
+    def __init__(self, context, *, workload_name: str):
         self._context = context
+        self._workload_name = workload_name
         super().__init__(delay=context.values.get("endpoint_source_delay_seconds", 0.0))
+        self._channel = InterruptibleOctagramChannel(
+            context,
+            workload_name=workload_name,
+            delay=context.values.get("endpoint_source_delay_seconds", 0.0),
+        )
+
+
+class InterruptibleOctagramChannel(EchoChannel):
+    def __init__(
+        self,
+        context,
+        *,
+        workload_name: str,
+        delay: float = 0.0,
+        id: str = "octagram",
+    ) -> None:
+        super().__init__(delay=delay, id=id)
+        self._context = context
+        self._workload_name = workload_name
+
+    async def send(self, request):
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        http_client = self._context.values.get("service_http_client")
+        if http_client is not None and not http_client.workload_exists(
+            self._workload_name
+        ):
+            raise InferenceError(
+                InferenceErrorCode.NO_ENDPOINT,
+                f"octagram workload {self._workload_name} is unavailable",
+                retryable=False,
+            )
+        return request.payload
 
 
 class FakeHttpxClientWrapper:
@@ -81,6 +118,11 @@ class FakeOctagramHttpClient:
                 json={"data": {}, "error": "", "code": 0},
             )
         raise AssertionError(f"unexpected method {method}")
+
+    def workload_exists(self, workload_name: str) -> bool:
+        return any(
+            url.endswith(f"/{workload_name}") for url in self._existing_workloads
+        )
 
 
 @dataclass
@@ -211,7 +253,10 @@ def configure_local_metastore_octagram_backend(app, monkeypatch) -> None:
         self._context.values["octagram_endpoint_source_builds"].append(
             handle.workload_name
         )
-        handle.source = FastOctagramEndpointSource(self._context)
+        handle.source = FastOctagramEndpointSource(
+            self._context,
+            workload_name=handle.workload_name,
+        )
         return Endpoint(source=handle.source, model_name=handle.model_name)
 
     async def _recording_teardown(self, handle):
