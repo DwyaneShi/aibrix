@@ -112,7 +112,7 @@ func applyTCEDemoOverrides(details *plannerclient.ResourceDetails, resource *pla
 	}
 	details.SaleMode = "reserved"
 	details.QoSLevel = "shared_cores"
-	details.EndpointCluster = "Echo-HL"
+	details.EndpointCluster = "China-North/HL/Echo/default"
 	details.LogicalCluster = "ai"
 	details.ResourcePoolName = "compute-3530-hl-echo-ai-default"
 	details.GpuType = "NVIDIA-H20"
