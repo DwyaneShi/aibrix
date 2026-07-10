@@ -19,5 +19,6 @@ package config
 var ProdI18NResourceManagerAPI = "https://resource-manager-i18n.byted.org"
 var ProdI18NAuthRegion = "i18n"
 var ProdI18NByteQuotaAPI = "http://tce-planning-i18n.byted.org"
+var ProdI18NGPUCenterAPI = "https://gpucenter.tiktok-row.net"
 var ProdI18NJwtAuthUrlPrefix = "https://cloud-i18n.bytedance.net/auth"
-var ProdI18NScheduledMatchFE = "https://cloud.tiktok-row.net/quota/scheduled-plan"
+var ProdI18NScheduledMatchFE = "https://gpucenter.tiktok-row.net/orders/scheduled"

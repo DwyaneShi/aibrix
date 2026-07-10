@@ -19,5 +19,6 @@ package config
 var TestingResourceManagerAPI = CNResourceManagerAPI
 var TestingAuthRegion = CNAuthRegion
 var TestingByteQuotaAPI = CNByteQuotaAPI
+var TestingGPUCenterAPI = CNGPUCenterAPI
 var TestingJwtAuthUrlPrefix = CNJwtAuthUrlPrefix
 var TestingScheduledMatchFE = CNScheduledMatchFE

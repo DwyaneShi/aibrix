@@ -43,6 +43,7 @@ type RegionConfig struct {
 	AuthRegion         string
 	ResourceManagerAPI string
 	ByteQuotaAPI       string
+	GPUCenterAPI       string
 	JwtAuthUrlPrefix   string
 	ScheduledMatchFE   string
 }
@@ -66,25 +67,30 @@ func GetRegionConfig() *RegionConfig {
 			ResourceManagerAPI: CNResourceManagerAPI,
 			AuthRegion:         CNAuthRegion,
 			ByteQuotaAPI:       CNByteQuotaAPI,
+			GPUCenterAPI:       CNGPUCenterAPI,
 			JwtAuthUrlPrefix:   CNJwtAuthUrlPrefix,
 			ScheduledMatchFE:   CNScheduledMatchFE,
 		}
 	case AppRegionProdUS:
 		return &RegionConfig{
 			AuthRegion:       ProdUSAuthRegion,
+			GPUCenterAPI:     ProdUSGPUCenterAPI,
 			JwtAuthUrlPrefix: ProdUSJwtAuthUrlPrefix,
 			ScheduledMatchFE: ProdUSScheduledMatchFE,
 		}
 	case AppRegionProdI18NBD:
 		return &RegionConfig{
 			AuthRegion:       ProdI18NBDAuthRegion,
+			GPUCenterAPI:     ProdI18NBDGPUCenterAPI,
 			JwtAuthUrlPrefix: ProdI18NBDJwtAuthUrlPrefix,
+			ScheduledMatchFE: ProdI18NBDScheduledMatchFE,
 		}
 	case AppRegionProdI18N:
 		return &RegionConfig{
 			ResourceManagerAPI: ProdI18NResourceManagerAPI,
 			AuthRegion:         ProdI18NAuthRegion,
 			ByteQuotaAPI:       ProdI18NByteQuotaAPI,
+			GPUCenterAPI:       ProdI18NGPUCenterAPI,
 			JwtAuthUrlPrefix:   ProdI18NJwtAuthUrlPrefix,
 			ScheduledMatchFE:   ProdI18NScheduledMatchFE,
 		}
@@ -92,6 +98,7 @@ func GetRegionConfig() *RegionConfig {
 		return &RegionConfig{
 			ResourceManagerAPI: TTPUSResourceManagerAPI,
 			ByteQuotaAPI:       TTPUSByteQuotaAPI,
+			GPUCenterAPI:       TTPUSGPUCenterAPI,
 			JwtAuthUrlPrefix:   TTPUSJwtAuthUrlPrefix,
 			ScheduledMatchFE:   TTPUScheduledMatchFE,
 		}
@@ -105,6 +112,7 @@ func GetRegionConfig() *RegionConfig {
 			ResourceManagerAPI: TestingResourceManagerAPI,
 			AuthRegion:         TestingAuthRegion,
 			ByteQuotaAPI:       TestingByteQuotaAPI,
+			GPUCenterAPI:       TestingGPUCenterAPI,
 			JwtAuthUrlPrefix:   TestingJwtAuthUrlPrefix,
 			ScheduledMatchFE:   TestingScheduledMatchFE,
 		}

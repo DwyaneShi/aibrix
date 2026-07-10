@@ -47,6 +47,16 @@ type ExtensionProvisionResultDetails struct {
 	TCE *TCEProvisionDetail `json:"tce,omitempty"`
 }
 
+// MatchingOrderTimelineEntry represents a single state transition in the
+// matching order lifecycle, derived from MatchingDetailResponse timestamps.
+type MatchingOrderTimelineEntry struct {
+	NewStatus        string `json:"new_status"`
+	NewDisplayStatus string `json:"new_display_status"`
+	Event            string `json:"event"`
+	Note             string `json:"note,omitempty"`
+	CreatedAt        string `json:"created_at"`
+}
+
 // TCEProvisionDetail contains TCE-specific provision result details.
 type TCEProvisionDetail struct {
 	// MatchId is the matching task ID.
@@ -57,6 +67,12 @@ type TCEProvisionDetail struct {
 	// GroupResults contains allocation details for each group.
 	// Each group can have multiple allocation segments (for elastic scheduling, etc.).
 	GroupResults *TCEGroupResults `json:"groupResults,omitempty"`
+
+	// Timeline contains matching order state transition entries, populated during
+	// provision polling by calling GetScheduledMatchDetail.
+	Timeline []MatchingOrderTimelineEntry `json:"timeline,omitempty"`
+
+	TicketPriority *TicketPriorityDetail `json:"ticketPriority,omitempty"`
 }
 
 // TCEGroupResults is a list of group allocation results.
@@ -115,4 +131,20 @@ type TCEAllocationSegment struct {
 type TCECommitInfo struct {
 	// ResourcePoolName is the resource pool name.
 	ResourcePoolName *string `json:"resourcePoolName,omitempty"`
+}
+
+// TicketPriorityDetail contains fusion priority calculation details from GPU Center.
+type TicketPriorityDetail struct {
+	TicketID              int64   `json:"ticketId"`
+	Priority              int64   `json:"priority"`
+	ResourceGroupPriority int64   `json:"resourceGroupPriority"`
+	ResourceGroupWeight   float64 `json:"resourceGroupWeight"`
+	GPUUtilPriority       int64   `json:"gpuUtilPriority"`
+	GPUUtilWeight         float64 `json:"gpuUtilWeight"`
+	BizPriority           int64   `json:"bizPriority"`
+	BizWeight             float64 `json:"bizWeight"`
+	WorkloadPriority      int64   `json:"workloadPriority"`
+	WorkloadWeight        float64 `json:"workloadWeight"`
+	SceneWeight           float64 `json:"sceneWeight"`
+	PlatformWeight        float64 `json:"platformWeight"`
 }

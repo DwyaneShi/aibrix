@@ -20,6 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strconv"
 	"sync"
 	"time"
 
@@ -30,6 +32,7 @@ import (
 	"k8s.io/utils/lru"
 
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/bytequota_client"
+	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/gpu_center_client"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/resource_manager_client/scheduled_plan_types"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/utils"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provisioner"
@@ -225,6 +228,31 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 			continue
 		}
 
+		upsertProvision := false
+		if result.TCE.TicketPriority == nil && p.clientset.GPUCenterClient != nil {
+			if ticketID, parseErr := strconv.ParseInt(result.TCE.MatchId, 10, 64); parseErr == nil {
+				if ticketPriority, tpErr := p.clientset.GPUCenterClient.GetTicketPriority(ctx, ticketID); tpErr == nil && ticketPriority != nil {
+					result.TCE.TicketPriority = toTCETicketPriority(ticketID, ticketPriority)
+					upsertProvision = true
+				} else if tpErr != nil {
+					klog.V(4).Infof("GetTicketPriority(%d) failed (non-fatal): %v", ticketID, tpErr)
+				}
+			}
+		}
+
+		// Fetch matching order timeline from GPU Center
+		if p.clientset.GPUCenterClient != nil && result.TCE.MatchId != "" {
+			prevTimeline := result.TCE.Timeline
+			if timeline, tErr := p.clientset.GPUCenterClient.GetOrderTimeline(ctx, result.TCE.MatchId); tErr == nil {
+				result.TCE.Timeline = toTCETimelineEntries(timeline)
+				if !reflect.DeepEqual(result.TCE.Timeline, prevTimeline) {
+					upsertProvision = true
+				}
+			} else {
+				klog.V(4).Infof("GetOrderTimeline(%s) failed (non-fatal): %v", result.TCE.MatchId, tErr)
+			}
+		}
+
 		if result.Status == types.ProvisionStatusProvisioning {
 			matchingResult, err := p.clientset.ResourceManagerClient.GetScheduledMatch(ctx, result.TCE.MatchId)
 			if err != nil || matchingResult == nil {
@@ -251,21 +279,17 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 					klog.Infof("groupResults: %s", groupResuslts)
 				}
 				klog.Infof("detailed matching log %s/%s", p.clientset.RegionConfig.ScheduledMatchFE, result.TCE.MatchId)
-				if err := p.store.UpsertProvision(ctx, result); err != nil {
-					klog.Errorf("update provision failed: %v, will try again in next list", err)
-					continue
-				}
+				upsertProvision = true
 			} else if matchingResult.Status == scheduled_plan_types.MatchingResultStatusCancelling || matchingResult.Status == scheduled_plan_types.MatchingResultStatusCancelled {
-				if err := p.store.UpdateProvisionStatus(ctx, result.ProvisionID, types.ProvisionStatusReleased); err != nil {
-					continue
-				}
 				result.Status = types.ProvisionStatusReleased
+				if !upsertProvision {
+					if err := p.store.UpdateProvisionStatus(ctx, result.ProvisionID, types.ProvisionStatusReleased); err != nil {
+						continue
+					}
+				}
 				klog.Infof("provision %s region %s, with matchId %s is released: %v", result.ProvisionID, result.Region, result.TCE.MatchId, result.TCE.GroupResults)
 				klog.Infof("detailed matching log %s/%s", p.clientset.RegionConfig.ScheduledMatchFE, result.TCE.MatchId)
 			} else if matchingResult.Status == scheduled_plan_types.MatchingResultStatusFailed {
-				if err := p.store.UpdateProvisionStatus(ctx, result.ProvisionID, types.ProvisionStatusFailed); err != nil {
-					continue
-				}
 				result.Status = types.ProvisionStatusFailed
 				var failedReason string
 				if matchingResult.Explanation != nil {
@@ -273,6 +297,11 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 					result.ErrorMessage = *matchingResult.Explanation
 				} else {
 					failedReason = "unknown"
+				}
+				if !upsertProvision {
+					if err := p.store.UpdateProvisionStatus(ctx, result.ProvisionID, types.ProvisionStatusFailed); err != nil {
+						continue
+					}
 				}
 				klog.Warningf("provision %s region %s, with matchId %s is failed: %s", result.ProvisionID, result.Region, result.TCE.MatchId, failedReason)
 				klog.Warningf("detailed matching log %s/%s", p.clientset.RegionConfig.ScheduledMatchFE, result.TCE.MatchId)
@@ -284,8 +313,21 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 				klog.Warningf("cancel scheduled match failed for provision %s, matchId %s: %v", result.ProvisionID, result.TCE.MatchId, err)
 			}
 			result.Status = types.ProvisionStatusReleased
+			if !upsertProvision {
+				if err := p.store.UpdateProvisionStatus(ctx, result.ProvisionID, types.ProvisionStatusReleased); err != nil {
+					continue
+				}
+			}
 			klog.Infof("provision %s region %s, with matchId %s is released: %v", result.ProvisionID, result.Region, result.TCE.MatchId, result.TCE.GroupResults)
 			klog.Infof("detailed matching log %s/%s", p.clientset.RegionConfig.ScheduledMatchFE, result.TCE.MatchId)
+		}
+
+		if upsertProvision {
+			if err := p.store.UpsertProvision(ctx, result); err != nil {
+				klog.Errorf("update provision failed, provision %s, matchId %s: %v, will try again in next list", result.ProvisionID, result.TCE.MatchId, err)
+			} else {
+				klog.V(4).Infof("provision %s upserted, matchId %s", result.ProvisionID, result.TCE.MatchId)
+			}
 		}
 	}
 
@@ -661,5 +703,40 @@ func toTCECommitInfo(commitInfo *scheduled_plan_types.CommitInfo) *types.TCEComm
 
 	return &types.TCECommitInfo{
 		ResourcePoolName: commitInfo.ResourcePoolName,
+	}
+}
+
+func toTCETimelineEntries(entries []gpu_center_client.OrderTimelineEntry) []types.MatchingOrderTimelineEntry {
+	result := make([]types.MatchingOrderTimelineEntry, 0, len(entries))
+	for _, e := range entries {
+		result = append(result, types.MatchingOrderTimelineEntry{
+			NewStatus:        e.NewStatus,
+			NewDisplayStatus: e.NewDisplayStatus,
+			Event:            e.Event,
+			Note:             e.Note,
+			CreatedAt:        e.CreatedAt,
+		})
+	}
+	return result
+}
+
+func toTCETicketPriority(ticketID int64, tp *gpu_center_client.TicketPriorityResult) *types.TicketPriorityDetail {
+	if tp == nil {
+		return nil
+	}
+
+	return &types.TicketPriorityDetail{
+		TicketID:              ticketID,
+		Priority:              tp.Priority,
+		ResourceGroupPriority: tp.ResourceGroupPriority,
+		ResourceGroupWeight:   tp.ResourceGroupWeight,
+		GPUUtilPriority:       tp.GPUUtilPriority,
+		GPUUtilWeight:         tp.GPUUtilWeight,
+		BizPriority:           tp.BizPriority,
+		BizWeight:             tp.BizWeight,
+		WorkloadPriority:      tp.WorkloadPriority,
+		WorkloadWeight:        tp.WorkloadWeight,
+		SceneWeight:           tp.SceneWeight,
+		PlatformWeight:        tp.PlatformWeight,
 	}
 }

@@ -19,5 +19,6 @@ package config
 var CNResourceManagerAPI = "https://resource-manager.byted.org"
 var CNAuthRegion = "cn"
 var CNByteQuotaAPI = "http://tce-planning.byted.org"
+var CNGPUCenterAPI = "https://gpucenter.bytedance.net"
 var CNJwtAuthUrlPrefix = "https://cloud.bytedance.net/auth"
-var CNScheduledMatchFE = "https://cloud.bytedance.net/quota/scheduled-plan"
+var CNScheduledMatchFE = "https://gpucenter.bytedance.net/orders/scheduled"

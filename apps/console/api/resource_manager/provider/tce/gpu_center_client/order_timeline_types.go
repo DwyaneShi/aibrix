@@ -14,9 +14,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package config
+package gpu_center_client
 
-var ProdUSAuthRegion = "us"
-var ProdUSGPUCenterAPI = "https://gpucenter.tiktok-row.net"
-var ProdUSJwtAuthUrlPrefix = "https://cloud-us.bytedance.net/auth"
-var ProdUSScheduledMatchFE = "https://gpucenter.tiktok-row.net/orders/scheduled"
+type OrderTimelineResponse struct {
+	Code string               `json:"code"`
+	Data []OrderTimelineEntry `json:"data,omitempty"`
+}
+
+type OrderTimelineEntry struct {
+	ID               int64  `json:"id"`
+	NewStatus        string `json:"new_status"`
+	NewDisplayStatus string `json:"new_display_status"`
+	Event            string `json:"event"`
+	Note             string `json:"note"`
+	CreatedAt        string `json:"created_at"`
+}

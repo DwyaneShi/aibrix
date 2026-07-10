@@ -20,6 +20,7 @@ import (
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/bytequota_client"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/config"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/credential"
+	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/gpu_center_client"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/jwt"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/resource_manager_client"
 
@@ -39,6 +40,7 @@ type tceClientset struct {
 	RegionConfig          *config.RegionConfig           `json:"regionConfig"`
 	ResourceManagerClient resource_manager_client.Client `json:"-"`
 	ByteQuotaClient       bytequota_client.Client        `json:"-"`
+	GPUCenterClient       gpu_center_client.Client       `json:"-"`
 }
 
 func newTCEClientset() (*tceClientset, error) {
@@ -48,9 +50,15 @@ func newTCEClientset() (*tceClientset, error) {
 	jwtHelper := jwt.NewJwtHelper(AIBrixPlatformServiceAccount, regionConfig.JwtAuthUrlPrefix)
 	resourceManagerClient := resource_manager_client.NewClientImpl(regionConfig.ResourceManagerAPI, jwtHelper)
 	byteQuotaClient := bytequota_client.NewClientImpl(regionConfig.ByteQuotaAPI, jwtHelper)
+
+	var gpuCenterClient gpu_center_client.Client
+	if regionConfig.GPUCenterAPI != "" {
+		gpuCenterClient = gpu_center_client.NewClientImpl(regionConfig.GPUCenterAPI, jwtHelper)
+	}
 	return &tceClientset{
 		RegionConfig:          regionConfig,
 		ResourceManagerClient: resourceManagerClient,
 		ByteQuotaClient:       byteQuotaClient,
+		GPUCenterClient:       gpuCenterClient,
 	}, nil
 }

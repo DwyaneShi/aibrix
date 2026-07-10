@@ -18,5 +18,6 @@ package config
 
 var TTPUSResourceManagerAPI = "https://resource-manager-us.byted.org"
 var TTPUSByteQuotaAPI = "http://tce-planning.tiktokd.org/"
+var TTPUSGPUCenterAPI = "https://gpucenter.tiktok-row.net"
 var TTPUSJwtAuthUrlPrefix = "https://cloud-tx.tiktokd.net/auth"
-var TTPUScheduledMatchFE = "https://cloud-ttp-us.bytedance.net/quota/scheduled-plan"
+var TTPUScheduledMatchFE = "https://gpucenter.tiktok-row.net/orders/scheduled"

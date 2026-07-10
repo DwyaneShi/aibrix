@@ -14,9 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package config
+package gpu_center_client
 
-var ProdUSAuthRegion = "us"
-var ProdUSGPUCenterAPI = "https://gpucenter.tiktok-row.net"
-var ProdUSJwtAuthUrlPrefix = "https://cloud-us.bytedance.net/auth"
-var ProdUSScheduledMatchFE = "https://gpucenter.tiktok-row.net/orders/scheduled"
+import "context"
+
+//go:generate mockgen -source=gpu_center_client.go -destination=./gpu_center_client_mock.go -package=gpu_center_client
+
+type Client interface {
+	GetTicketPriority(ctx context.Context, ticketID int64) (*TicketPriorityResult, error)
+	GetOrderTimeline(ctx context.Context, matchID string) ([]OrderTimelineEntry, error)
+}

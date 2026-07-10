@@ -17,4 +17,6 @@ limitations under the License.
 package config
 
 var ProdI18NBDAuthRegion = "i18nbd"
+var ProdI18NBDGPUCenterAPI = "https://gpucenter.tiktok-row.net"
 var ProdI18NBDJwtAuthUrlPrefix = "https://cloud.byteintl.net/auth"
+var ProdI18NBDScheduledMatchFE = "https://gpucenter.tiktok-row.net/orders/scheduled"

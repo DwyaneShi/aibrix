@@ -34,10 +34,6 @@ import (
 	rmtypes "github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
 )
 
-const (
-	TCEMatchingOrderKey = "Matching Order"
-)
-
 func init() {
 	RegisterBackend(rmtypes.ResourceProvisionTypeTCE, func(provisioner.Provisioner) plannerBackend {
 		return &tcePlannerBackend{}
@@ -129,15 +125,5 @@ func (b *tcePlannerBackend) BuildRuntime(req *plannerapi.EnqueueRequest, prov *r
 		return nil, fmt.Errorf("missing enqueue request")
 	}
 
-	matchingOrderUrl := "—"
-	if prov != nil && prov.TCE != nil && prov.TCE.MatchOrderUrl != "" {
-		matchingOrderUrl = prov.TCE.MatchOrderUrl
-	}
-
-	return &plannerapi.RuntimeRef{
-		Target: "Octagram",
-		Options: map[string]any{
-			TCEMatchingOrderKey: matchingOrderUrl,
-		},
-	}, nil
+	return &plannerapi.RuntimeRef{Target: "Octagram"}, nil
 }

@@ -96,12 +96,7 @@ func (b *tceMockBackend) BuildRuntime(req *plannerapi.EnqueueRequest, prov *rmty
 	if req == nil {
 		return nil, fmt.Errorf("missing enqueue request")
 	}
-	return &plannerapi.RuntimeRef{
-		Target: "Octagram",
-		Options: map[string]any{
-			TCEMatchingOrderKey: "—",
-		},
-	}, nil
+	return &plannerapi.RuntimeRef{Target: "Octagram"}, nil
 }
 
 // applyTCEDemoOverrides fills the MDS submission fields with hardcoded demo
