@@ -17,6 +17,7 @@ from typing import Dict, Optional, Union
 
 from aibrix import envs
 from aibrix.storage.base import BaseStorage, StorageConfig
+from aibrix.storage.bytetos_internal import tos_psm_env
 from aibrix.storage.local import LocalStorage
 from aibrix.storage.types import StorageType
 
@@ -92,11 +93,17 @@ def create_storage(
         secret_key = kwargs.get("secret_key") or envs.STORAGE_TOS_SECRET_KEY
         endpoint = kwargs.get("endpoint") or envs.STORAGE_TOS_ENDPOINT
         region = kwargs.get("region") or envs.STORAGE_TOS_REGION
+        psm_env = tos_psm_env()
+        tos_idc = kwargs.get("idc") or psm_env["idc"]
+        tos_service = kwargs.get("service") or psm_env["service"]
+        tos_cluster = kwargs.get("cluster") or psm_env["cluster"]
+        tos_remote_psm = kwargs.get("remote_psm") or psm_env["remote_psm"]
         force_volcano = bool(
             kwargs.get("force_volcano")
             if "force_volcano" in kwargs
             else os.getenv("PAAS_CLOUD_ENV") == "VOLCANO"
         )
+        use_psm_client = bool(tos_idc) and not force_volcano
         enable_crc = bool(
             kwargs.get("enable_crc")
             if "enable_crc" in kwargs
@@ -109,10 +116,16 @@ def create_storage(
             raise ValueError("access_key is required for TOS storage")
         if not secret_key:
             raise ValueError("secret_key is required for TOS storage")
-        if not endpoint:
+        if not use_psm_client and not endpoint:
             raise ValueError("endpoint is required for TOS storage")
-        if not region:
+        if not use_psm_client and not region:
             raise ValueError("region is required for TOS storage")
+        if use_psm_client and not tos_service:
+            raise ValueError("service is required for TOS PSM storage")
+        if use_psm_client and not tos_cluster:
+            raise ValueError("cluster is required for TOS PSM storage")
+        if use_psm_client and not tos_remote_psm:
+            raise ValueError("remote_psm is required for TOS PSM storage")
 
         from aibrix.storage.bytetos import TOSStorage
 
@@ -124,6 +137,10 @@ def create_storage(
             region=region,
             force_volcano=force_volcano,
             enable_crc=enable_crc,
+            idc=tos_idc,
+            service=tos_service,
+            cluster=tos_cluster,
+            remote_psm=tos_remote_psm,
             config=config,
         )
 
@@ -182,12 +199,15 @@ def create_storage_from_env() -> BaseStorage:
         storage_type = StorageType.S3
         kwargs = {}
 
-    # Check if TOS credentials are available (higher priority than S3)
+    # Check if TOS credentials are available (higher priority than S3).
+    # PSM-backed in-house TOS only needs the IDC, not endpoint/region.
     if (
         envs.STORAGE_TOS_ACCESS_KEY
         and envs.STORAGE_TOS_SECRET_KEY
-        and envs.STORAGE_TOS_ENDPOINT
-        and envs.STORAGE_TOS_REGION
+        and (
+            (envs.STORAGE_TOS_ENDPOINT and envs.STORAGE_TOS_REGION)
+            or tos_psm_env()["idc"]
+        )
     ):
         storage_type = StorageType.TOS
         kwargs = {}

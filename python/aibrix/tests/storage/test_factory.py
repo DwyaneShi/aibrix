@@ -18,7 +18,9 @@ Storage factory tests.
 Tests the storage factory functionality for creating different storage types.
 """
 
+import sys
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -120,6 +122,7 @@ class TestStorageFactory:
                 bucket_name="test-bucket",
                 access_key="key",
                 secret_key="secret",
+                region="cn-beijing",
             )
 
         with pytest.raises(ValueError, match="region is required"):
@@ -130,6 +133,95 @@ class TestStorageFactory:
                 secret_key="secret",
                 endpoint="http://example.com",
             )
+
+    def _install_fake_bytedtos(self, monkeypatch):
+        calls = {}
+
+        class StaticCredentials:
+            def __init__(self, access_key: str, secret_key: str):
+                self.access_key = access_key
+                self.secret_key = secret_key
+
+        class ClientV2:
+            def __init__(self, bucket, cred=None, **kwargs):
+                calls["bucket"] = bucket
+                calls["cred"] = cred
+                calls["kwargs"] = kwargs
+
+        fake_bytedtos = types.ModuleType("bytedtos")
+        fake_bytedtos.ClientV2 = ClientV2
+        fake_bytedtos.StaticCredentials = StaticCredentials
+        fake_bytedtos_errors = types.ModuleType("bytedtos.errors")
+        fake_bytedtos_errors.TosException = Exception
+        fake_tos = types.ModuleType("tos")
+        fake_tos_exceptions = types.ModuleType("tos.exceptions")
+        fake_tos_exceptions.TosClientError = Exception
+        fake_tos_exceptions.TosServerError = Exception
+
+        fake_tos.exceptions = fake_tos_exceptions
+        monkeypatch.setitem(sys.modules, "tos", fake_tos)
+        monkeypatch.setitem(sys.modules, "bytedtos", fake_bytedtos)
+        monkeypatch.setitem(sys.modules, "bytedtos.errors", fake_bytedtos_errors)
+        monkeypatch.setitem(sys.modules, "tos.exceptions", fake_tos_exceptions)
+        monkeypatch.delitem(sys.modules, "aibrix.storage.bytetos", raising=False)
+        return calls
+
+    @pytest.mark.parametrize("idc", ["mya", "maliva", "cn-beijing", "us-east-1"])
+    def test_create_tos_storage_with_psm_client(self, monkeypatch, idc):
+        """TOS PSM storage passes PSM params to bytedtos.ClientV2."""
+        calls = self._install_fake_bytedtos(monkeypatch)
+
+        storage = create_storage(
+            StorageType.TOS,
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            endpoint="https://tos-cn-beijing.volces.com",
+            region="cn-beijing",
+            idc=idc,
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+
+        assert storage.bucket_name == "test-bucket"
+        assert calls["bucket"] == "test-bucket"
+        assert calls["cred"].access_key == "ak"
+        assert calls["cred"].secret_key == "sk"
+        assert calls["kwargs"] == {
+            "service": "toutiao.tos.tosapi",
+            "cluster": "default",
+            "idc": idc,
+            "remote_psm": "inf.aibrix.metadata",
+        }
+
+    def test_create_tos_storage_with_force_volcano_preserves_ve_kwargs(
+        self, monkeypatch
+    ):
+        """force_volcano keeps the existing Volcano kwargs path."""
+        calls = self._install_fake_bytedtos(monkeypatch)
+
+        storage = create_storage(
+            StorageType.TOS,
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            endpoint="https://tos-cn-beijing.volces.com",
+            region="cn-beijing",
+            force_volcano=True,
+            enable_crc=True,
+        )
+
+        assert storage.bucket_name == "test-bucket"
+        assert calls["bucket"] == "test-bucket"
+        assert calls["cred"].access_key == "ak"
+        assert calls["cred"].secret_key == "sk"
+        assert calls["kwargs"]["enable_crc64"] is True
+        assert calls["kwargs"]["connection_pool_size"] >= 1
+        assert calls["kwargs"]["force_volcano"] is True
+        assert calls["kwargs"]["ve_cred"] is calls["cred"]
+        assert calls["kwargs"]["ve_region"] == "cn-beijing"
+        assert calls["kwargs"]["ve_endpoint"] == "https://tos-cn-beijing.volces.com"
 
     def test_unsupported_storage_type(self):
         """Test error handling for unsupported storage types."""

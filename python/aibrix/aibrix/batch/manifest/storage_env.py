@@ -39,6 +39,7 @@ from typing import Any, Dict, List
 from aibrix import envs
 from aibrix.logger import init_logger
 from aibrix.storage import StorageType
+from aibrix.storage.bytetos_internal import tos_psm_env, tos_psm_env_vars
 
 logger = init_logger(__name__)
 
@@ -60,8 +61,10 @@ def build_storage_env() -> List[Dict[str, Any]]:
         if (
             envs.STORAGE_TOS_ACCESS_KEY
             and envs.STORAGE_TOS_SECRET_KEY
-            and envs.STORAGE_TOS_ENDPOINT
-            and envs.STORAGE_TOS_REGION
+            and (
+                (envs.STORAGE_TOS_ENDPOINT and envs.STORAGE_TOS_REGION)
+                or tos_psm_env()["idc"]
+            )
         ):
             storage_type = StorageType.TOS.value
         elif envs.STORAGE_AWS_ACCESS_KEY_ID and envs.STORAGE_AWS_SECRET_ACCESS_KEY:
@@ -97,6 +100,7 @@ def build_storage_env() -> List[Dict[str, Any]]:
             "STORAGE_TOS_BUCKET": envs.STORAGE_TOS_BUCKET,
             "STORAGE_TOS_ENABLE_CRC": str(envs.STORAGE_TOS_ENABLE_CRC).lower(),
         }
+        passthrough.update(tos_psm_env_vars())
         for name, val in passthrough.items():
             if val:
                 env.append({"name": name, "value": val})

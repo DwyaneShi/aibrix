@@ -21,7 +21,8 @@ _DEFAULT_TCE_ENV = "prod"
 _DEFAULT_TCE_STAGE = "all_dc"
 _DEFAULT_TCE_PRIMARY_PORT = "fake_port"
 _DEFAULT_VOLUME_CAPACITY = "10000Gi"
-_DEFAULT_IDENTITY_TREATMENT_USER = "jingyuan.zhang0929"
+_DEFAULT_IDENTITY_TREATMENT_USER = getattr(envs, "OCTAGRAM_IDENTITY_USER", "jingyuan.zhang0929")
+
 
 # The matching/planner layer uses fully-qualified accelerator SKU names while
 # Octagram nodes are labeled with vendor-stripped names. Translate on dispatch;

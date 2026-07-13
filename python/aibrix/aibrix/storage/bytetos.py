@@ -41,10 +41,14 @@ class TOSStorage(BaseStorage2):
         bucket_name: str,
         access_key: str,
         secret_key: str,
-        endpoint: str,
-        region: str,
+        endpoint: Optional[str] = None,
+        region: Optional[str] = None,
         force_volcano: bool = False,
         enable_crc: bool = False,
+        idc: Optional[str] = None,
+        service: str = "toutiao.tos.tosapi",
+        cluster: str = "default",
+        remote_psm: str = "inf.aibrix.metadata",
         config: Optional[StorageConfig] = None,
     ):
         resolved_config = config or StorageConfig()
@@ -55,8 +59,14 @@ class TOSStorage(BaseStorage2):
         super().__init__(resolved_config)
         self.bucket_name = bucket_name
         self.force_volcano = force_volcano or os.getenv("PAAS_CLOUD_ENV") == "VOLCANO"
+        use_psm_client = bool(idc) and not self.force_volcano
 
-        if not self.force_volcano and self._is_public_tos_endpoint(endpoint):
+        if (
+            not use_psm_client
+            and not self.force_volcano
+            and endpoint
+            and self._is_public_tos_endpoint(endpoint)
+        ):
             raise ValueError(
                 "public TOS endpoints require PAAS_CLOUD_ENV=VOLCANO or force_volcano=True"
             )
@@ -64,22 +74,34 @@ class TOSStorage(BaseStorage2):
         cred = StaticCredentials(access_key, secret_key)
 
         try:
-            kwargs: dict[str, Any] = {
-                "enable_crc64": enable_crc,
+            kwargs: dict[str, Any] = {}
+            if use_psm_client:
+                # PSM mode is intentionally mutually exclusive with endpoint
+                # mode. Passing endpoint/region here can trigger bytedtos'
+                # endpoint validation before internal PSM routing is used.
+                kwargs.update(
+                    {
+                        "service": service,
+                        "cluster": cluster,
+                        "idc": idc,
+                        "remote_psm": remote_psm,
+                    }
+                )
+            else:
+                kwargs["enable_crc64"] = enable_crc
                 # bytedtos.Client uses requests' HTTPAdapter pool sizing via
                 # ``connection_pool_size`` on the non-Volcano path. VeClient
                 # currently ignores this kwarg, but passing it through keeps
                 # the config surface consistent across TOS backends.
-                "connection_pool_size": max(self.config.max_concurrency, 1),
-            }
-            if self.force_volcano:
-                kwargs["force_volcano"] = True
-                kwargs["ve_cred"] = cred
-                kwargs["ve_region"] = region
-                kwargs["ve_endpoint"] = endpoint
-            else:
-                kwargs["region"] = region
-                kwargs["endpoint"] = endpoint
+                kwargs["connection_pool_size"] = max(self.config.max_concurrency, 1)
+                if self.force_volcano:
+                    kwargs["force_volcano"] = True
+                    kwargs["ve_cred"] = cred
+                    kwargs["ve_region"] = region
+                    kwargs["ve_endpoint"] = endpoint
+                else:
+                    kwargs["region"] = region
+                    kwargs["endpoint"] = endpoint
 
             self.client = bytedtos.ClientV2(
                 bucket=bucket_name,

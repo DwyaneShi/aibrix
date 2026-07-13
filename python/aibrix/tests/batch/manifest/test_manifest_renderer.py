@@ -307,6 +307,10 @@ class TestRendererHappyPath:
         monkeypatch.setattr(envs, "STORAGE_TOS_REGION", "cn-beijing")
         monkeypatch.setattr(envs, "STORAGE_TOS_BUCKET", "bucket")
         monkeypatch.setattr(envs, "STORAGE_TOS_ENABLE_CRC", True)
+        monkeypatch.setattr(envs, "STORAGE_TOS_IDC", "mya")
+        monkeypatch.setattr(envs, "STORAGE_TOS_SERVICE", "toutiao.tos.tosapi")
+        monkeypatch.setattr(envs, "STORAGE_TOS_CLUSTER", "default")
+        monkeypatch.setattr(envs, "STORAGE_TOS_REMOTE_PSM", "inf.aibrix.metadata")
         r = renderer_factory(
             templates=[_vllm_template(count=1)],
             profiles=[_profile()],
@@ -322,6 +326,10 @@ class TestRendererHappyPath:
         assert env["STORAGE_TOS_REGION"] == "cn-beijing"
         assert env["STORAGE_TOS_BUCKET"] == "bucket"
         assert env["STORAGE_TOS_ENABLE_CRC"] == "true"
+        assert env["STORAGE_TOS_IDC"] == "mya"
+        assert env["STORAGE_TOS_SERVICE"] == "toutiao.tos.tosapi"
+        assert env["STORAGE_TOS_CLUSTER"] == "default"
+        assert env["STORAGE_TOS_REMOTE_PSM"] == "inf.aibrix.metadata"
 
     def test_local_storage_env_injected(self, renderer_factory, monkeypatch):
         monkeypatch.setenv("STORAGE_TYPE", "local")
