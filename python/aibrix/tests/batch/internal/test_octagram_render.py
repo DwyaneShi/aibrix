@@ -25,7 +25,13 @@ else:
 
 from aibrix import envs
 from aibrix.batch.internal.octagram_renderer import OctagramManifestRenderer
-from aibrix.batch.job_entity import BatchJobSpec, ResourceDetail, ResourceRequirement
+from aibrix.batch.internal.octagram_utils import get_job_name, parse_endpoint_cluster
+from aibrix.batch.job_entity import (
+    BatchJob,
+    BatchJobSpec,
+    ResourceDetail,
+    ResourceRequirement,
+)
 
 _TESTDATA_DIR = Path(__file__).resolve().parents[1] / "testdata"
 _FIXED_NOW = datetime(2026, 5, 22, 18, 0, tzinfo=timezone.utc)
@@ -70,7 +76,7 @@ def _request_snapshot_template_spec():
 
 def _resource_detail(
     *,
-    endpoint_cluster: str = "Echo-HL",
+    endpoint_cluster: str = "zone/HL/Echo/default",
     resource_pool_name: str = ("compute-3530-hl-echo-ai-default"),
     salemode: str = "scheduled",
     qos_level: str = "shared_cores",
@@ -104,7 +110,7 @@ def _resource_detail(
 
 def _request_snapshot_resource_detail() -> ResourceDetail:
     return _resource_detail(
-        endpoint_cluster="Federation-YG",
+        endpoint_cluster="zone/YG/Federation/default",
         resource_pool_name=(
             "compute-3530-yg-federationgpu-non.standard.g19-default-guarantee"
         ),
@@ -116,7 +122,7 @@ def _request_snapshot_resource_detail() -> ResourceDetail:
 
 def _request_snapshot_xpu_resource_detail() -> ResourceDetail:
     return _resource_detail(
-        endpoint_cluster="Federation-ZC",
+        endpoint_cluster="zone/ZC/Federation/dandelion-ai-mix",
         resource_pool_name="compute-0-zc-federationgpu-dandelion.ai.mix-default",
         logical_cluster="dandelion-ai-mix",
         accelerator_type="MLU590-M9DK",
@@ -168,14 +174,22 @@ def _render(
     detail: ResourceDetail | None = None,
     now_provider=None,
 ):
+    resolved_spec = spec or _spec()
     renderer = OctagramManifestRenderer(
         now_provider=now_provider or (lambda: _FIXED_NOW)
     )
     return renderer.render(
         job_id=job_id,
-        spec=spec or _spec(),
+        job_name=_job_name(job_id, resolved_spec),
+        spec=resolved_spec,
         providerSpec=detail or _resource_detail(),
     )
+
+
+def _job_name(job_id: str, spec: BatchJobSpec) -> str:
+    job = BatchJob.new_local(spec)
+    job.status.job_id = job_id
+    return get_job_name(job)
 
 
 def _load_testdata_yaml(name: str):
@@ -193,9 +207,7 @@ def _normalized_xpu_request_snapshot_yaml():
 
 
 def test_parse_endpoint_cluster_preserves_cluster_prefix_and_idc_suffix():
-    renderer = OctagramManifestRenderer()
-
-    cluster, idc = renderer._parse_endpoint_cluster("Bernard-Prod-HL")
+    _, idc, cluster, _ = parse_endpoint_cluster("zone/HL/Bernard-Prod/default")
 
     assert cluster == "Bernard-Prod"
     assert idc == "HL"
@@ -339,7 +351,7 @@ def test_octagram_manifest_renderer_omits_console_job_id_when_not_provided():
 
 def test_octagram_manifest_renderer_clamps_window_to_resource_allocation_deadline():
     detail = _resource_detail(
-        endpoint_cluster="Federation-LQ",
+        endpoint_cluster="zone/LQ/Federation/default",
         resource_pool_name=("compute-3530-lq-federationgpu-default-default-guarantee"),
         logical_cluster="default",
         accelerator_type="NVIDIA-A10",
@@ -537,7 +549,7 @@ def test_octagram_manifest_renderer_writes_json_request_for_test_template(tmp_pa
             accelerator_category="xpu",
             accelerator_type="MLU590-M9DK",
             resource_pool_name="compute-0-zc-federationgpu-dandelion.ai.mix-default",
-            endpoint_cluster="Federation-ZC",
+            endpoint_cluster="zone/ZC/Federation/dandelion-ai-mix",
             logical_cluster="dandelion-ai-mix",
         ),
         now_provider=lambda: datetime.now(timezone.utc),

@@ -213,7 +213,7 @@ def _make_job(job_id: str = "job-123456789abc") -> BatchJob:
                 "provision_resource_deadline": 3600,
                 "resource_details": [
                     {
-                        "endpoint_cluster": "cluster-a",
+                        "endpoint_cluster": "zone/HL/cluster-a/default",
                         "gpu_type": "H100",
                         "replica": 1,
                     }
@@ -236,6 +236,9 @@ def _make_job(job_id: str = "job-123456789abc") -> BatchJob:
         spec=spec,
         status=status,
     )
+
+
+_PROVISIONED_CLUSTER = "cluster-a-HL"
 
 
 @pytest.mark.asyncio
@@ -303,6 +306,41 @@ async def test_delete_workload_404_returns_without_scale_fallback(
     )
     wrapper = FakeHttpxClientWrapper(
         {"DELETE": [_response("DELETE", base_url, 404, text="gone")]}
+    )
+    runtime = _runtime(wrapper, monkeypatch)
+
+    await runtime._delete_workload(handle)
+
+    assert wrapper.async_client.calls == [("DELETE", base_url)]
+
+
+@pytest.mark.asyncio
+async def test_delete_workload_payload_not_found_returns_without_scale_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handle = _handle()
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-abcd1234"
+    )
+    wrapper = FakeHttpxClientWrapper(
+        {
+            "DELETE": [
+                _response(
+                    "DELETE",
+                    base_url,
+                    200,
+                    payload={
+                        "data": None,
+                        "error": (
+                            "deploymentworkloads.core.tce.byted.org "
+                            '"batch-job-abcd1234" not found'
+                        ),
+                        "code": 404,
+                    },
+                )
+            ]
+        }
     )
     runtime = _runtime(wrapper, monkeypatch)
 
@@ -626,7 +664,7 @@ async def test_octagram_runtime_builds_execution_ref_with_current_payload_shape(
 ) -> None:
     job = _make_job()
     base_url = (
-        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        f"https://octagram-gateway.example.test/api/v1/clusters/{_PROVISIONED_CLUSTER}/"
         "namespaces/default/deploymentworkloads/batch-job-1234"
     )
     runtime = _runtime(
@@ -642,9 +680,9 @@ async def test_octagram_runtime_builds_execution_ref_with_current_payload_shape(
 
     assert execution is not None
     assert execution.driver_type == "tce"
-    assert execution.owner_ref == "cluster-a:default:batch-job-1234"
+    assert execution.owner_ref == f"{_PROVISIONED_CLUSTER}:default:batch-job-1234"
     assert execution.reconnect_payload == {
-        "cluster": "cluster-a",
+        "cluster": _PROVISIONED_CLUSTER,
         "namespace": "default",
         "workloadName": "batch-job-1234",
         "modelName": "batch-job-1234",
@@ -661,14 +699,14 @@ async def test_octagram_runtime_reconnect_accepts_current_payload_keys(
     job = _make_job()
     runtime = _runtime(FakeHttpxClientWrapper({"POST": []}), monkeypatch)
 
-    handle = await runtime._reconnect(
+    handle = await runtime._load_handle(
         job,
         job.job_id,
         JobRuntimeRef(
             driverType="tce",
-            ownerRef="cluster-a:default:batch-job-1234",
+            ownerRef=f"{_PROVISIONED_CLUSTER}:default:batch-job-1234",
             reconnectPayload={
-                "cluster": "cluster-a",
+                "cluster": _PROVISIONED_CLUSTER,
                 "namespace": "default",
                 "workloadName": "batch-job-1234",
                 "modelName": "batch-job-1234",
@@ -680,7 +718,7 @@ async def test_octagram_runtime_reconnect_accepts_current_payload_keys(
     )
 
     assert handle is not None
-    assert handle.cluster == "cluster-a"
+    assert handle.cluster == _PROVISIONED_CLUSTER
     assert handle.namespace == "default"
     assert handle.workload_name == "batch-job-1234"
     assert handle.model_name == "batch-job-1234"

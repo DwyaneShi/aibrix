@@ -781,6 +781,11 @@ E2E_BACKENDS: dict[str, E2ETestBackend] = {
             "fake_provisioning_runtime",
             "finalizing_cancel_api_race",
             "service_discovery",
+            "restart_phase_recovery",
+            "restart_validation_runtime_delta_observable",
+            "runtime_cleanup_interruption",
+            "restart_in_progress_multi_teardown",
+            "restart_in_progress_lock_retry",
         ),
         runtime_debug_config={
             "teardown_calls_key": "runtime_teardown_calls",

@@ -126,7 +126,7 @@ class OctagramRuntime(RuntimeBase):
         )
         return payload
 
-    async def _reconnect(
+    async def _load_handle(
         self, job: BatchJob, job_id: str, execution: JobRuntimeRef
     ) -> OctagramHandle | None:
         del job
@@ -163,7 +163,7 @@ class OctagramRuntime(RuntimeBase):
         )
         self._active_handle = handle
         logger.info(
-            "Reconnected Octagram runtime for batch job",
+            "Loaded Octagram runtime handle for batch job",
             job_id=job_id,
             cluster=handle.cluster,
             namespace=handle.namespace,
@@ -518,6 +518,18 @@ class OctagramRuntime(RuntimeBase):
                 continue
 
             if response.get("error"):
+                if (
+                    response.get("code") == 404
+                    and "not found" in str(response["error"]).lower()
+                ):
+                    logger.info(
+                        "Octagram workload delete returned payload not found; treating as already deleted",
+                        cluster=handle.cluster,
+                        namespace=handle.namespace,
+                        workload=handle.workload_name,
+                        retried_after_scale=retry_after_scale,
+                    )  # type: ignore[call-arg]
+                    return
                 raise BatchJobError(
                     code=BatchJobErrorCode.RESOURCE_DELETION_ERROR,
                     message=f"Octagram workload delete failed: {response['error']}",

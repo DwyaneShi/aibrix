@@ -238,9 +238,13 @@ spec:
             value: fake_port
           - name: TCE_STAGE
             value: all_dc
+          - name: BERNARD_SERVICE_ID
+            value: batch-tce-vllm-6281d2a8
           - name: LOAD_SERVICE_PSM
             value: inf.aibrix.platform # metadata.labels["psm"]
           - name: TCE_PSM
+            value: inf.aibrix.platform # metadata.labels["psm"]
+          - name: AIBRIX_PSM
             value: inf.aibrix.platform # metadata.labels["psm"]
         ports:
           - containerPort: 0

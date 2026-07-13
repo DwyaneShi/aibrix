@@ -12,6 +12,11 @@ from aibrix.batch.client.channel import EchoChannel
 from aibrix.batch.client.errors import InferenceError, InferenceErrorCode
 from aibrix.batch.client.sources import NoopEndpointSource
 from aibrix.batch.job_driver.runtime import Endpoint
+from tests.batch.job_driver.runtime.backends import (
+    RuntimePatchBackend,
+    RuntimePatchTarget,
+    register_runtime_patch_backend,
+)
 
 ORIGINAL_OCTAGRAM_TEARDOWN = octagram_runtime_module.OctagramRuntime._teardown
 
@@ -192,11 +197,12 @@ class FakeOctagramRenderer:
     def render(
         self,
         job_id: str,
+        job_name: str,
         spec,
         provider_spec,
         namespace: str = "default",
     ) -> dict[str, Any]:
-        del spec, provider_spec
+        del job_name, spec, provider_spec
         workload_name = f"batch-{job_id[:8]}"
         return {
             "apiVersion": "core.tce.byted.org/v1alpha1",
@@ -246,7 +252,7 @@ def configure_local_metastore_octagram_backend(app, monkeypatch) -> None:
     monkeypatch.setattr(
         octagram_runtime_module.OctagramRuntime,
         "_build_renderer",
-        staticmethod(lambda context: FakeOctagramRenderer()),
+        staticmethod(lambda _context: FakeOctagramRenderer()),
     )
 
     async def _connect_with_test_source(self, handle):
@@ -279,3 +285,28 @@ def configure_local_metastore_octagram_backend(app, monkeypatch) -> None:
         "_teardown",
         _recording_teardown,
     )
+
+
+register_runtime_patch_backend(
+    "tce",
+    RuntimePatchBackend(
+        runtime_class=octagram_runtime_module.OctagramRuntime,
+        create=RuntimePatchTarget(
+            "aibrix.batch.internal.octagram_runtime.OctagramRuntime._provision",
+            octagram_runtime_module.OctagramRuntime._provision,
+        ),
+        teardown=RuntimePatchTarget(
+            "aibrix.batch.internal.octagram_runtime.OctagramRuntime._teardown",
+            octagram_runtime_module.OctagramRuntime._teardown,
+        ),
+        delete_wait=RuntimePatchTarget(
+            "aibrix.batch.internal.octagram_runtime.OctagramRuntime._wait_teared_down",
+            octagram_runtime_module.OctagramRuntime._wait_teared_down,
+        ),
+        should_teardown=RuntimePatchTarget(
+            "aibrix.batch.internal.octagram_runtime."
+            "OctagramRuntime._should_teardown_runtime_handle",
+            octagram_runtime_module.OctagramRuntime._should_teardown_runtime_handle,
+        ),
+    ),
+)
