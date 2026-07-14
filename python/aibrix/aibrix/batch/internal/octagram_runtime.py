@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any, Optional, cast
 
@@ -47,6 +48,8 @@ from aibrix.logger import init_logger
 logger = init_logger(__name__)
 
 _DEFAULT_NAMESPACE = "default"
+_MODEL_DISCOVERY_WAIT_SLICE_SECONDS = 10.0
+_GET_RESPONSE_LOG_SUPPRESSION_MIN_WINDOW_SECONDS = 30.0
 
 
 @dataclass
@@ -86,6 +89,9 @@ class OctagramRuntime(RuntimeBase):
             envs.OCTAGRAM_WORKLOAD_NOT_FOUND_GRACE_SECONDS
         )
         self._active_handle: Optional[OctagramHandle] = None
+        self._last_get_response_log_by_request: dict[
+            str, tuple[str, dict[str, Any], float]
+        ] = {}
 
     @staticmethod
     def _build_renderer(context: InfrastructureContext) -> OctagramManifestRenderer:
@@ -249,13 +255,16 @@ class OctagramRuntime(RuntimeBase):
         if handle.base_url is None:
             await self._wait_for_model_discoverable(handle)
 
-    async def _check_liveness(self, handle: OctagramHandle) -> None:
+    async def _check_liveness(
+        self, handle: OctagramHandle, reason: str = "unspecified"
+    ) -> None:
         await self._wait_for_workload_ready(
             cluster=handle.cluster,
             namespace=handle.namespace,
             workload_name=handle.workload_name,
             replicas=handle.replicas,
             wait_mode=RUNTIME_WAIT_MODE_RECONNECT,
+            request_reason=f"check_liveness:{reason}",
         )
 
     async def _connect(self, handle: OctagramHandle) -> Endpoint:
@@ -325,7 +334,9 @@ class OctagramRuntime(RuntimeBase):
                         "Timed out waiting for Consul endpoints for model "
                         f"'{handle.model_name}'"
                     )
-                wait_slice_seconds = min(remaining_timeout_seconds, 1.0)
+                wait_slice_seconds = min(
+                    remaining_timeout_seconds, _MODEL_DISCOVERY_WAIT_SLICE_SECONDS
+                )
                 try:
                     await model_discovery.wait_for_model_endpoints(
                         served_model_name=handle.model_name,
@@ -368,6 +379,7 @@ class OctagramRuntime(RuntimeBase):
             response = await self._octagram_request(
                 "POST",
                 self._workload_path(cluster, namespace, workload["metadata"]["name"]),
+                reason="create_workload",
                 json=workload,
             )
         except httpx.HTTPStatusError as ex:
@@ -399,6 +411,7 @@ class OctagramRuntime(RuntimeBase):
         workload_name: str,
         replicas: int,
         wait_mode: str = RUNTIME_WAIT_MODE_RECONNECT,
+        request_reason: Optional[str] = None,
     ) -> None:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + float(self._ready_timeout_seconds)
@@ -415,6 +428,7 @@ class OctagramRuntime(RuntimeBase):
                 workload = await self._octagram_request(
                     "GET",
                     self._workload_path(cluster, namespace, workload_name),
+                    reason=request_reason or f"wait_for_workload_ready:{wait_mode}",
                 )
             except httpx.HTTPStatusError as ex:
                 # Octagram has read-after-write inconsistency problem.
@@ -491,7 +505,11 @@ class OctagramRuntime(RuntimeBase):
         # retry the delete once.
         for retry_after_scale in (False, True):
             try:
-                response = await self._octagram_request("DELETE", workload_path)
+                response = await self._octagram_request(
+                    "DELETE",
+                    workload_path,
+                    reason="delete_workload",
+                )
             except httpx.HTTPStatusError as ex:
                 if ex.response.status_code == 404:
                     logger.info(
@@ -561,6 +579,7 @@ class OctagramRuntime(RuntimeBase):
                     handle.workload_name,
                     replicas=0,
                 ),
+                reason="scale_workload_to_zero",
             )
         except httpx.HTTPStatusError as ex:
             if ex.response.status_code == 404:
@@ -632,6 +651,7 @@ class OctagramRuntime(RuntimeBase):
         method: str,
         url: str,
         *,
+        reason: str = "unspecified",
         response_log_fields: Optional[list[str]] = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -666,6 +686,7 @@ class OctagramRuntime(RuntimeBase):
             log_data: dict[str, Any] = {
                 "method": method,
                 "url": url,
+                "reason": reason,
                 "status_code": response.status_code if response is not None else None,
             }
             if response is not None:
@@ -687,12 +708,14 @@ class OctagramRuntime(RuntimeBase):
                     payload_data, field
                 )
 
-            if error is None:
-                logger.info("octagram response", **log_data)  # type: ignore[call-arg]
-            else:
+            if error is not None:
                 log_data["error"] = str(error)
                 if response is not None:
                     log_data["response_text"] = response.text
+            should_log = self._should_log_get_response(method, url, log_data)
+            if error is None and should_log:
+                logger.info("octagram response", **log_data)  # type: ignore[call-arg]
+            elif error is not None and should_log:
                 logger.error("octagram response", **log_data)  # type: ignore[call-arg]
         return payload or {}
 
@@ -711,6 +734,31 @@ class OctagramRuntime(RuntimeBase):
                 return None
             current = current.get(part)
         return current
+
+    def _should_log_get_response(
+        self,
+        method: str,
+        url: str,
+        log_data: dict[str, Any],
+    ) -> bool:
+        if method.upper() != "GET":
+            return True
+        suppression_window_s = max(
+            self.session_liveness_check_interval_s,
+            _GET_RESPONSE_LOG_SUPPRESSION_MIN_WINDOW_SECONDS,
+        )
+        now = time.monotonic()
+        reason = str(log_data.get("reason") or "unspecified")
+        last_entry = self._last_get_response_log_by_request.get(url)
+        self._last_get_response_log_by_request[url] = (reason, dict(log_data), now)
+        if last_entry is None:
+            return True
+        last_reason, last_log_data, last_logged_at = last_entry
+        if reason != last_reason:
+            return True
+        if log_data != last_log_data:
+            return True
+        return (now - last_logged_at) >= suppression_window_s
 
 
 register_runtime(

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional, cast
@@ -23,7 +24,11 @@ import httpx
 import pytest
 
 from aibrix import envs
-from aibrix.batch.internal.octagram_runtime import OctagramHandle, OctagramRuntime
+from aibrix.batch.internal.octagram_runtime import (
+    _MODEL_DISCOVERY_WAIT_SLICE_SECONDS,
+    OctagramHandle,
+    OctagramRuntime,
+)
 from aibrix.batch.job_entity import (
     BatchJob,
     BatchJobEndpoint,
@@ -239,6 +244,24 @@ def _make_job(job_id: str = "job-123456789abc") -> BatchJob:
 
 
 _PROVISIONED_CLUSTER = "cluster-a-HL"
+
+
+def _scripted_monotonic(values: tuple[float, ...]) -> Any:
+    scripted_values = iter(values)
+    original_monotonic = time.monotonic
+    last_value = values[-1]
+
+    def _monotonic() -> float:
+        nonlocal last_value
+        try:
+            last_value = next(scripted_values)
+            return last_value
+        except StopIteration:
+            # asyncio and pytest may call monotonic more often than the
+            # runtime code path under test; keep returning a stable value.
+            return max(last_value, original_monotonic())
+
+    return _monotonic
 
 
 @pytest.mark.asyncio
@@ -592,7 +615,9 @@ async def test_wait_for_model_discoverable_checks_workload_existence_each_poll(
         workload_name: str,
         replicas: int,
         wait_mode: str = "reconnect",
+        request_reason: Optional[str] = None,
     ) -> None:
+        del request_reason
         workload_wait_calls.append(
             (cluster, namespace, workload_name, replicas, wait_mode)
         )
@@ -606,6 +631,18 @@ async def test_wait_for_model_discoverable_checks_workload_existence_each_poll(
     ]
     assert len(model_discovery.calls) == 1
     assert model_discovery.calls[0]["served_model_name"] == "served-model"
+    assert (
+        model_discovery.calls[0]["timeout_seconds"]
+        == _MODEL_DISCOVERY_WAIT_SLICE_SECONDS
+    )
+    assert (
+        model_discovery.calls[0]["lookup_timeout_seconds"]
+        == _MODEL_DISCOVERY_WAIT_SLICE_SECONDS
+    )
+    assert (
+        model_discovery.calls[0]["poll_interval_seconds"]
+        == _MODEL_DISCOVERY_WAIT_SLICE_SECONDS
+    )
 
 
 @pytest.mark.asyncio
@@ -621,8 +658,9 @@ async def test_wait_ready_forwards_wait_mode_to_workload_readiness(
         workload_name: str,
         replicas: int,
         wait_mode: str = "reconnect",
+        request_reason: Optional[str] = None,
     ) -> None:
-        del cluster, namespace, workload_name, replicas
+        del cluster, namespace, workload_name, replicas, request_reason
         readiness_wait_modes.append(wait_mode)
 
     async def _wait_for_model_discoverable(handle: OctagramHandle) -> None:
@@ -634,6 +672,31 @@ async def test_wait_ready_forwards_wait_mode_to_workload_readiness(
     await runtime._wait_ready(_handle(), wait_mode="reconnect")
 
     assert readiness_wait_modes == ["reconnect"]
+
+
+@pytest.mark.asyncio
+async def test_check_liveness_forwards_reason_to_workload_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(FakeHttpxClientWrapper({"GET": []}), monkeypatch)
+    liveness_calls: list[tuple[str, Optional[str]]] = []
+
+    async def _wait_for_workload_ready(
+        cluster: str,
+        namespace: str,
+        workload_name: str,
+        replicas: int,
+        wait_mode: str = "reconnect",
+        request_reason: Optional[str] = None,
+    ) -> None:
+        del cluster, namespace, workload_name, replicas
+        liveness_calls.append((wait_mode, request_reason))
+
+    runtime._wait_for_workload_ready = _wait_for_workload_ready  # type: ignore[method-assign]
+
+    await runtime._check_liveness(_handle(), reason="session_liveness_loop")
+
+    assert liveness_calls == [("reconnect", "check_liveness:session_liveness_loop")]
 
 
 @pytest.mark.asyncio
@@ -761,7 +824,7 @@ async def test_octagram_request_get_logs_default_response_fields(
 
     monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.logger.info", _info)
 
-    payload = await runtime._octagram_request("GET", base_url)
+    payload = await runtime._octagram_request("GET", base_url, reason="test_reason")
 
     assert payload == {
         "data": {
@@ -778,12 +841,210 @@ async def test_octagram_request_get_logs_default_response_fields(
             {
                 "method": "GET",
                 "url": base_url,
+                "reason": "test_reason",
                 "status_code": 200,
                 "phase": "synced",
                 "replicasStatuses": [{"name": "batch-job-abcd1234"}],
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_octagram_request_get_suppresses_repeated_response_logs_within_default_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-abcd1234"
+    )
+    payload = {
+        "data": {
+            "status": {
+                "phase": "synced",
+                "replicasStatuses": [{"name": "batch-job-abcd1234"}],
+            }
+        }
+    }
+    wrapper = FakeHttpxClientWrapper(
+        {
+            "GET": [
+                _response("GET", base_url, 200, payload=payload),
+                _response("GET", base_url, 200, payload=payload),
+            ]
+        }
+    )
+    runtime = _runtime(wrapper, monkeypatch)
+    runtime.session_liveness_check_interval_s = 5
+    logs: list[tuple[str, str, dict]] = []
+
+    def _info(event: str, **kwargs) -> None:
+        logs.append(("info", event, kwargs))
+
+    monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.logger.info", _info)
+    monkeypatch.setattr(
+        "aibrix.batch.internal.octagram_runtime.time.monotonic",
+        _scripted_monotonic((100.0, 120.0)),
+    )
+
+    await runtime._octagram_request("GET", base_url)
+    await runtime._octagram_request("GET", base_url)
+
+    assert len(logs) == 1
+
+
+@pytest.mark.asyncio
+async def test_octagram_request_get_logs_repeated_response_after_liveness_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-abcd1234"
+    )
+    payload = {
+        "data": {
+            "status": {
+                "phase": "synced",
+                "replicasStatuses": [{"name": "batch-job-abcd1234"}],
+            }
+        }
+    }
+    wrapper = FakeHttpxClientWrapper(
+        {
+            "GET": [
+                _response("GET", base_url, 200, payload=payload),
+                _response("GET", base_url, 200, payload=payload),
+            ]
+        }
+    )
+    runtime = _runtime(wrapper, monkeypatch)
+    runtime.session_liveness_check_interval_s = 45
+    logs: list[tuple[str, str, dict]] = []
+
+    def _info(event: str, **kwargs) -> None:
+        logs.append(("info", event, kwargs))
+
+    monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.logger.info", _info)
+    monkeypatch.setattr(
+        "aibrix.batch.internal.octagram_runtime.time.monotonic",
+        _scripted_monotonic((100.0, 146.0)),
+    )
+
+    await runtime._octagram_request("GET", base_url)
+    await runtime._octagram_request("GET", base_url)
+
+    assert len(logs) == 2
+
+
+@pytest.mark.asyncio
+async def test_octagram_request_get_dedup_tracks_last_reason_per_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-abcd1234"
+    )
+    payload = {
+        "data": {
+            "status": {
+                "phase": "synced",
+                "replicasStatuses": [{"name": "batch-job-abcd1234"}],
+            }
+        }
+    }
+    wrapper = FakeHttpxClientWrapper(
+        {
+            "GET": [
+                _response("GET", base_url, 200, payload=payload),
+                _response("GET", base_url, 200, payload=payload),
+                _response("GET", base_url, 200, payload=payload),
+            ]
+        }
+    )
+    runtime = _runtime(wrapper, monkeypatch)
+    runtime.session_liveness_check_interval_s = 30
+    logs: list[tuple[str, str, dict]] = []
+
+    def _info(event: str, **kwargs) -> None:
+        logs.append(("info", event, kwargs))
+
+    monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.logger.info", _info)
+    monkeypatch.setattr(
+        "aibrix.batch.internal.octagram_runtime.time.monotonic",
+        _scripted_monotonic((100.0, 110.0, 120.0)),
+    )
+
+    await runtime._octagram_request("GET", base_url, reason="reason_a")
+    await runtime._octagram_request("GET", base_url, reason="reason_b")
+    await runtime._octagram_request("GET", base_url, reason="reason_a")
+
+    assert [entry[2]["reason"] for entry in logs] == [
+        "reason_a",
+        "reason_b",
+        "reason_a",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_octagram_request_get_suppresses_repeated_error_logs_within_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-abcd1234"
+    )
+    wrapper = FakeHttpxClientWrapper(
+        {
+            "GET": [
+                _response(
+                    "GET",
+                    base_url,
+                    404,
+                    payload={
+                        "data": {
+                            "status": {
+                                "phase": "failed",
+                                "replicasStatuses": [{"name": "batch-job-abcd1234"}],
+                            }
+                        }
+                    },
+                    text="gone",
+                ),
+                _response(
+                    "GET",
+                    base_url,
+                    404,
+                    payload={
+                        "data": {
+                            "status": {
+                                "phase": "failed",
+                                "replicasStatuses": [{"name": "batch-job-abcd1234"}],
+                            }
+                        }
+                    },
+                    text="gone",
+                ),
+            ]
+        }
+    )
+    runtime = _runtime(wrapper, monkeypatch)
+    logs: list[tuple[str, str, dict]] = []
+
+    def _error(event: str, **kwargs) -> None:
+        logs.append(("error", event, kwargs))
+
+    monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.logger.error", _error)
+    monkeypatch.setattr(
+        "aibrix.batch.internal.octagram_runtime.time.monotonic",
+        _scripted_monotonic((100.0, 120.0)),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await runtime._octagram_request("GET", base_url)
+    with pytest.raises(httpx.HTTPStatusError):
+        await runtime._octagram_request("GET", base_url)
+
+    assert len(logs) == 1
 
 
 @pytest.mark.asyncio
@@ -814,7 +1075,9 @@ async def test_octagram_request_post_skips_default_response_fields(
 
     monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.logger.info", _info)
 
-    await runtime._octagram_request("POST", base_url, json={"name": "demo"})
+    await runtime._octagram_request(
+        "POST", base_url, reason="test_reason", json={"name": "demo"}
+    )
 
     assert logs == [
         (
@@ -823,6 +1086,7 @@ async def test_octagram_request_post_skips_default_response_fields(
             {
                 "method": "POST",
                 "url": base_url,
+                "reason": "test_reason",
                 "status_code": 200,
             },
         )
@@ -866,7 +1130,7 @@ async def test_octagram_request_http_error_logs_response_text_and_fields(
     monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.logger.error", _error)
 
     with pytest.raises(httpx.HTTPStatusError):
-        await runtime._octagram_request("GET", base_url)
+        await runtime._octagram_request("GET", base_url, reason="test_reason")
 
     assert logs == [
         (
@@ -875,6 +1139,7 @@ async def test_octagram_request_http_error_logs_response_text_and_fields(
             {
                 "method": "GET",
                 "url": base_url,
+                "reason": "test_reason",
                 "status_code": 404,
                 "phase": "failed",
                 "replicasStatuses": [{"name": "batch-job-abcd1234"}],
@@ -906,7 +1171,7 @@ async def test_octagram_request_non_http_error_logs_without_response(
     monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.logger.error", _error)
 
     with pytest.raises(RuntimeError, match="boom"):
-        await runtime._octagram_request("GET", base_url)
+        await runtime._octagram_request("GET", base_url, reason="test_reason")
 
     assert logs == [
         (
@@ -915,6 +1180,7 @@ async def test_octagram_request_non_http_error_logs_without_response(
             {
                 "method": "GET",
                 "url": base_url,
+                "reason": "test_reason",
                 "status_code": None,
                 "phase": None,
                 "replicasStatuses": None,
