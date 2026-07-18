@@ -292,6 +292,9 @@ class OctagramManifestRenderer(_RendererSupport):
             "name": job_name,
             "batch.aibrix.ai/job_id": job_id,
             "model.aibrix.ai/name": served_model_name,
+            # malachite-reporter relies on this label to determine whether
+            # to enable bernard metrics reporting
+            "cloudnative-application-platform": "mlsys.bernard",
         }
         if console_job_id:
             labels["batch.aibrix.ai/console_job_id"] = console_job_id
@@ -379,6 +382,9 @@ class OctagramManifestRenderer(_RendererSupport):
                 "model.aibrix.ai/name": manifest["metadata"]["labels"][
                     "model.aibrix.ai/name"
                 ],
+                # malachite-reporter relies on this label to determine whether
+                # to enable bernard metrics reporting
+                "cloudnative-application-platform": "mlsys.bernard",
             },
             "annotations": annotations,
         }
@@ -712,6 +718,7 @@ class OctagramManifestRenderer(_RendererSupport):
                     {"name": "LOAD_SERVICE_PSM", "value": psm},
                     {"name": "TCE_PSM", "value": psm},
                     {"name": "AIBRIX_PSM", "value": psm},
+                    {"name": "BERNARD_ID", "value": psm},
                 ]
             )
         return env

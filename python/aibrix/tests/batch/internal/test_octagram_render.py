@@ -255,6 +255,11 @@ def test_octagram_manifest_renderer_renders_expected_tce_fields():
         "batch-tce-vllm-6281d2a8-model_store_open_source_model"
     )
     assert rendered["metadata"]["labels"]["psm"] == "inf.aibrix.platform"
+    # cloudnative-application-platform is required to enable the bernard metrics
+    # reporting of malachite-reporter
+    assert rendered["metadata"]["labels"]["cloudnative-application-platform"] == (
+        "mlsys.bernard"
+    )
     assert (
         rendered["spec"]["deploymentMeta"]["labels"]["batch.aibrix.ai/console_job_id"]
         == "console-job-123"
@@ -299,6 +304,9 @@ def test_octagram_manifest_renderer_renders_expected_tce_fields():
     assert env["TCE_CLUSTER"] == "Echo"
     assert env["TCE_INTERNAL_IDC"] == "HL"
     assert env["LOAD_SERVICE_PSM"] == "inf.aibrix.platform"
+    # check bernard ids
+    assert env["BERNARD_SERVICE_ID"] == "batch-tce-vllm-6281d2a8"
+    assert env["BERNARD_ID"] == "inf.aibrix.platform"
 
     treatments = rendered["spec"]["treatments"]
     assert treatments[0] == {

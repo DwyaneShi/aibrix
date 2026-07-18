@@ -11,6 +11,7 @@ metadata:
     batch.aibrix.ai/console_job_id: console-job-123 # spec.aibrix.job_id
     model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model # job name + lower(model name: extracted last segment from template.model_source.uri)
     psm: inf.aibrix.platform # template.spec.service_id; otherwise env.CONSUL_BATCH_DISCOVERY_PSM
+    cloudnative-application-platform: mlsys.bernard # malachite-reporter relies on this label to determine whether to enable bernard metrics reporting
 spec:
   deploymentMeta:
     labels:
@@ -19,6 +20,7 @@ spec:
       batch.aibrix.ai/console_job_id: console-job-123 # spec.aibrix.job_id
       model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model # metadata.labels["model.aibrix.ai/name"]
       psm: inf.aibrix.platform # metadata.labels["psm"]
+      cloudnative-application-platform: mlsys.bernard # malachite-reporter relies on this label to determine whether to enable bernard metrics reporting
     annotations:
       bytedance.quota.salemode: scheduled # spec.aibrix.resource_allocation.resource_details[].salemode
       deployment.tce.kubernetes.io/gpu-type: NVIDIA-A30 # spec.aibrix.resource_allocation.resource_details[].resource[].acceleratorType
@@ -244,7 +246,9 @@ spec:
             value: inf.aibrix.platform # metadata.labels["psm"]
           - name: TCE_PSM
             value: inf.aibrix.platform # metadata.labels["psm"]
-          - name: AIBRIX_PSM
+          - name: AIBRIX_PSM # Prefered PSM for consul discovery
+            value: inf.aibrix.platform # metadata.labels["psm"]
+          - name: BERNARD_ID # Required to enable bernard metrics reporting
             value: inf.aibrix.platform # metadata.labels["psm"]
         ports:
           - containerPort: 0

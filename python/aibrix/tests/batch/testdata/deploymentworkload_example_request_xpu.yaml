@@ -11,6 +11,7 @@ metadata:
     model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model
     batch.aibrix.ai/console_job_id: console-job-123
     psm: inf.aibrix.platform
+    cloudnative-application-platform: mlsys.bernard
 spec:
   featureGates:
     - name: ContainerResourceView
@@ -36,6 +37,7 @@ spec:
       model.aibrix.ai/name: batch-tce-vllm-6281d2a8-model_store_open_source_model
       psm: inf.aibrix.platform
       batch.aibrix.ai/console_job_id: console-job-123
+      cloudnative-application-platform: mlsys.bernard
     annotations:
       bytedance.quota.salemode: scheduled
       deployment.tce.kubernetes.io/xpu-type: MLU590-M9DK
@@ -106,6 +108,8 @@ spec:
           - name: TCE_PSM
             value: inf.aibrix.platform
           - name: AIBRIX_PSM
+            value: inf.aibrix.platform
+          - name: BERNARD_ID
             value: inf.aibrix.platform
         ports:
           - containerPort: 0
