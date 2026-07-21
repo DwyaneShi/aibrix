@@ -33,8 +33,8 @@ REGION_DOMAINS = {
         tce_status="http://tce-status.byted.org",
     ),
     "US": RegionDomain(
-        argos="https://cloud-tx.tiktokd.net/argos",
-        grafana="https://grafana-us.byted.org",
+        argos="https://cloud.tiktok-row.net/argos",
+        grafana="https://grafana-i18n.byted.org",
         octagram="https://octagram-gateway-us.byted.org",
         tce_status="http://tce-status-us.byted.org",
     ),
