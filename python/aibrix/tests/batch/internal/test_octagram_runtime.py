@@ -29,6 +29,10 @@ from aibrix.batch.internal.octagram_runtime import (
     OctagramHandle,
     OctagramRuntime,
 )
+from aibrix.batch.job_driver.runtime import (
+    RUNTIME_WAIT_MODE_PROVISION,
+    RUNTIME_WAIT_MODE_RECONNECT,
+)
 from aibrix.batch.job_entity import (
     BatchJob,
     BatchJobEndpoint,
@@ -294,23 +298,32 @@ async def test_delete_workload_falls_back_to_scale_zero_on_non_404_delete_error(
         }
     )
     runtime = _runtime(wrapper, monkeypatch)
-    wait_calls: list[tuple[str, str, str, int]] = []
+    wait_calls: list[tuple[str, str, str, int, Optional[str]]] = []
 
     async def _wait_ready(
         cluster: str,
         namespace: str,
         workload_name: str,
         replicas: int,
-        wait_mode: str = "reconnect",
+        wait_mode: str = RUNTIME_WAIT_MODE_RECONNECT,
+        request_reason: Optional[str] = None,
     ) -> None:
         del wait_mode
-        wait_calls.append((cluster, namespace, workload_name, replicas))
+        wait_calls.append((cluster, namespace, workload_name, replicas, request_reason))
 
-    monkeypatch.setattr(runtime, "_wait_for_workload_ready", _wait_ready)
+    monkeypatch.setattr(runtime, "_wait_for_workload", _wait_ready)
 
     await runtime._delete_workload(handle)
 
-    assert wait_calls == [("cluster-a", "default", "batch-job-abcd1234", 0)]
+    assert wait_calls == [
+        (
+            "cluster-a",
+            "default",
+            "batch-job-abcd1234",
+            0,
+            "wait for workload synced at zero replicas",
+        )
+    ]
     assert wrapper.async_client.calls == [
         ("DELETE", base_url),
         ("PATCH", f"{base_url}/scale?replicas=0"),
@@ -425,15 +438,16 @@ async def test_delete_workload_raises_when_scaled_workload_never_resyncs(
         namespace: str,
         workload_name: str,
         replicas: int,
-        wait_mode: str = "reconnect",
+        wait_mode: str = RUNTIME_WAIT_MODE_RECONNECT,
+        request_reason: Optional[str] = None,
     ) -> None:
-        del cluster, namespace, workload_name, replicas, wait_mode
+        del cluster, namespace, workload_name, replicas, wait_mode, request_reason
         raise BatchJobError(
             code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
             message="Timed out waiting for octagram workload to become ready",
         )
 
-    monkeypatch.setattr(runtime, "_wait_for_workload_ready", _wait_ready)
+    monkeypatch.setattr(runtime, "_wait_for_workload", _wait_ready)
 
     with pytest.raises(BatchJobError) as exc_info:
         await runtime._delete_workload(handle)
@@ -444,7 +458,7 @@ async def test_delete_workload_raises_when_scaled_workload_never_resyncs(
 
 
 @pytest.mark.asyncio
-async def test_wait_for_workload_ready_returns_when_zero_replica_is_synced(
+async def test_wait_for_workload_returns_when_zero_replica_is_synced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_url = (
@@ -477,7 +491,7 @@ async def test_wait_for_workload_ready_returns_when_zero_replica_is_synced(
     )
     runtime = _runtime(wrapper, monkeypatch)
 
-    await runtime._wait_for_workload_ready(
+    await runtime._wait_for_workload(
         cluster="cluster-a",
         namespace="default",
         workload_name="batch-job-abcd1234",
@@ -488,7 +502,7 @@ async def test_wait_for_workload_ready_returns_when_zero_replica_is_synced(
 
 
 @pytest.mark.asyncio
-async def test_wait_for_workload_ready_404_raises_not_found_error(
+async def test_wait_for_workload_404_raises_not_found_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_url = (
@@ -501,12 +515,12 @@ async def test_wait_for_workload_ready_404_raises_not_found_error(
     runtime = _runtime(wrapper, monkeypatch)
 
     with pytest.raises(BatchJobError) as exc_info:
-        await runtime._wait_for_workload_ready(
+        await runtime._wait_for_workload(
             cluster="cluster-a",
             namespace="default",
             workload_name="batch-job-abcd1234",
             replicas=1,
-            wait_mode="reconnect",
+            wait_mode=RUNTIME_WAIT_MODE_RECONNECT,
         )
 
     assert exc_info.value.code == BatchJobErrorCode.RESOURCE_NOTFOUND_ERROR.value
@@ -514,7 +528,7 @@ async def test_wait_for_workload_ready_404_raises_not_found_error(
 
 
 @pytest.mark.asyncio
-async def test_wait_for_workload_ready_provision_retries_404_until_workload_exists(
+async def test_wait_for_workload_provision_retries_404_until_workload_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_url = (
@@ -548,19 +562,19 @@ async def test_wait_for_workload_ready_provision_retries_404_until_workload_exis
 
     monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.asyncio.sleep", _sleep)
 
-    await runtime._wait_for_workload_ready(
+    await runtime._wait_for_workload(
         cluster="cluster-a",
         namespace="default",
         workload_name="batch-job-abcd1234",
         replicas=1,
-        wait_mode="provision",
+        wait_mode=RUNTIME_WAIT_MODE_PROVISION,
     )
 
     assert wrapper.async_client.calls == [("GET", base_url), ("GET", base_url)]
 
 
 @pytest.mark.asyncio
-async def test_wait_for_workload_ready_provision_404_respects_grace_window(
+async def test_wait_for_workload_provision_404_respects_grace_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_url = (
@@ -587,12 +601,12 @@ async def test_wait_for_workload_ready_provision_404_respects_grace_window(
     monkeypatch.setattr("aibrix.batch.internal.octagram_runtime.asyncio.sleep", _sleep)
 
     with pytest.raises(BatchJobError) as exc_info:
-        await runtime._wait_for_workload_ready(
+        await runtime._wait_for_workload(
             cluster="cluster-a",
             namespace="default",
             workload_name="batch-job-abcd1234",
             replicas=1,
-            wait_mode="provision",
+            wait_mode=RUNTIME_WAIT_MODE_PROVISION,
         )
 
     assert exc_info.value.code == BatchJobErrorCode.RESOURCE_NOTFOUND_ERROR.value
@@ -607,28 +621,19 @@ async def test_wait_for_model_discoverable_checks_workload_existence_each_poll(
     runtime = _runtime(FakeHttpxClientWrapper({"GET": []}), monkeypatch)
     model_discovery = FakeModelDiscovery()
     runtime._context.model_discovery = cast(ModelDiscovery, model_discovery)
-    workload_wait_calls: list[tuple[str, str, str, int, str]] = []
+    liveness_calls: list[str] = []
 
-    async def _wait_for_workload_ready(
-        cluster: str,
-        namespace: str,
-        workload_name: str,
-        replicas: int,
-        wait_mode: str = "reconnect",
-        request_reason: Optional[str] = None,
+    async def _check_liveness(
+        handle: OctagramHandle, reason: str = "unspecified"
     ) -> None:
-        del request_reason
-        workload_wait_calls.append(
-            (cluster, namespace, workload_name, replicas, wait_mode)
-        )
+        del handle
+        liveness_calls.append(reason)
 
-    runtime._wait_for_workload_ready = _wait_for_workload_ready  # type: ignore[method-assign]
+    runtime._check_liveness = _check_liveness  # type: ignore[method-assign]
 
     await runtime._wait_for_model_discoverable(_handle())
 
-    assert workload_wait_calls == [
-        ("cluster-a", "default", "batch-job-abcd1234", 1, "reconnect")
-    ]
+    assert liveness_calls == ["wait for model discoverable"]
     assert len(model_discovery.calls) == 1
     assert model_discovery.calls[0]["served_model_name"] == "served-model"
     assert (
@@ -652,12 +657,12 @@ async def test_wait_ready_forwards_wait_mode_to_workload_readiness(
     runtime = _runtime(FakeHttpxClientWrapper({"GET": []}), monkeypatch)
     readiness_wait_modes: list[str] = []
 
-    async def _wait_for_workload_ready(
+    async def _wait_for_workload(
         cluster: str,
         namespace: str,
         workload_name: str,
         replicas: int,
-        wait_mode: str = "reconnect",
+        wait_mode: str = RUNTIME_WAIT_MODE_RECONNECT,
         request_reason: Optional[str] = None,
     ) -> None:
         del cluster, namespace, workload_name, replicas, request_reason
@@ -666,12 +671,12 @@ async def test_wait_ready_forwards_wait_mode_to_workload_readiness(
     async def _wait_for_model_discoverable(handle: OctagramHandle) -> None:
         del handle
 
-    runtime._wait_for_workload_ready = _wait_for_workload_ready  # type: ignore[method-assign]
+    runtime._wait_for_workload = _wait_for_workload  # type: ignore[method-assign]
     runtime._wait_for_model_discoverable = _wait_for_model_discoverable  # type: ignore[method-assign]
 
-    await runtime._wait_ready(_handle(), wait_mode="reconnect")
+    await runtime._wait_ready(_handle(), wait_mode=RUNTIME_WAIT_MODE_RECONNECT)
 
-    assert readiness_wait_modes == ["reconnect"]
+    assert readiness_wait_modes == [RUNTIME_WAIT_MODE_RECONNECT]
 
 
 @pytest.mark.asyncio
@@ -681,22 +686,24 @@ async def test_check_liveness_forwards_reason_to_workload_readiness(
     runtime = _runtime(FakeHttpxClientWrapper({"GET": []}), monkeypatch)
     liveness_calls: list[tuple[str, Optional[str]]] = []
 
-    async def _wait_for_workload_ready(
+    async def _wait_for_workload(
         cluster: str,
         namespace: str,
         workload_name: str,
         replicas: int,
-        wait_mode: str = "reconnect",
+        wait_mode: str = RUNTIME_WAIT_MODE_RECONNECT,
         request_reason: Optional[str] = None,
     ) -> None:
         del cluster, namespace, workload_name, replicas
         liveness_calls.append((wait_mode, request_reason))
 
-    runtime._wait_for_workload_ready = _wait_for_workload_ready  # type: ignore[method-assign]
+    runtime._wait_for_workload = _wait_for_workload  # type: ignore[method-assign]
 
     await runtime._check_liveness(_handle(), reason="session_liveness_loop")
 
-    assert liveness_calls == [("reconnect", "check_liveness:session_liveness_loop")]
+    assert liveness_calls == [
+        (RUNTIME_WAIT_MODE_RECONNECT, "check_liveness:session_liveness_loop")
+    ]
 
 
 @pytest.mark.asyncio

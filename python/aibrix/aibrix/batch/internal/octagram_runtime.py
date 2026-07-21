@@ -245,7 +245,7 @@ class OctagramRuntime(RuntimeBase):
         handle: OctagramHandle,
         wait_mode: str = RUNTIME_WAIT_MODE_PROVISION,
     ) -> None:
-        await self._wait_for_workload_ready(
+        await self._wait_for_workload(
             cluster=handle.cluster,
             namespace=handle.namespace,
             workload_name=handle.workload_name,
@@ -258,7 +258,7 @@ class OctagramRuntime(RuntimeBase):
     async def _check_liveness(
         self, handle: OctagramHandle, reason: str = "unspecified"
     ) -> None:
-        await self._wait_for_workload_ready(
+        await self._wait_for_workload(
             cluster=handle.cluster,
             namespace=handle.namespace,
             workload_name=handle.workload_name,
@@ -321,12 +321,9 @@ class OctagramRuntime(RuntimeBase):
             while True:
                 if self._stop_requested.is_set():
                     raise asyncio.CancelledError
-                await self._wait_for_workload_ready(
-                    cluster=handle.cluster,
-                    namespace=handle.namespace,
-                    workload_name=handle.workload_name,
-                    replicas=handle.replicas,
-                    wait_mode=RUNTIME_WAIT_MODE_RECONNECT,
+                await self._check_liveness(
+                    handle,
+                    reason="wait for model discoverable",
                 )
                 remaining_timeout_seconds = deadline - loop.time()
                 if remaining_timeout_seconds <= 0:
@@ -404,7 +401,7 @@ class OctagramRuntime(RuntimeBase):
                 message=f"Octagram workload create failed: {response['error']}",
             )
 
-    async def _wait_for_workload_ready(
+    async def _wait_for_workload(
         self,
         cluster: str,
         namespace: str,
@@ -428,7 +425,7 @@ class OctagramRuntime(RuntimeBase):
                 workload = await self._octagram_request(
                     "GET",
                     self._workload_path(cluster, namespace, workload_name),
-                    reason=request_reason or f"wait_for_workload_ready:{wait_mode}",
+                    reason=request_reason or f"wait_for_workload:{wait_mode}",
                 )
             except httpx.HTTPStatusError as ex:
                 # Octagram has read-after-write inconsistency problem.
@@ -602,11 +599,12 @@ class OctagramRuntime(RuntimeBase):
         try:
             # The scale endpoint is asynchronous. Wait until Octagram reports the
             # workload as synced at zero replicas before retrying delete.
-            await self._wait_for_workload_ready(
+            await self._wait_for_workload(
                 cluster=handle.cluster,
                 namespace=handle.namespace,
                 workload_name=handle.workload_name,
                 replicas=0,
+                request_reason="wait for workload synced at zero replicas",
             )
         except BatchJobError as ex:
             raise BatchJobError(
