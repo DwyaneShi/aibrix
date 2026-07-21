@@ -36,7 +36,7 @@ function bumpVersion(v: string): string {
 }
 
 const ENGINE_TYPES = ['vllm', 'sglang', 'trtllm', 'vipe'];
-const MODEL_SOURCE_TYPES = ['huggingface', 's3', 'local', 'hdfs', 'on-demand-loading'];
+const MODEL_SOURCE_TYPES = ['huggingface', 's3', 'local', 'hdfs'];
 
 // Per-source URI validation. Returns an error message or '' when valid.
 // Empty URI is accepted here; the form-level required check belongs elsewhere.
@@ -243,7 +243,7 @@ export function CreateModelDeploymentTemplate({
       setError('Version is required');
       return;
     }
-    if (!spec.modelSource?.uri?.trim() && spec.modelSource?.type !== 'on-demand-loading') {
+    if (!spec.modelSource?.uri?.trim()) {
       setError('Model source URI is required');
       return;
     }
@@ -393,7 +393,6 @@ export function CreateModelDeploymentTemplate({
           const sourceType = spec.modelSource?.type ?? 'huggingface';
           const hint = authHint(sourceType);
           const isHF = sourceType === 'huggingface';
-          const isOnDemand = sourceType === 'on-demand-loading';
           return (
             <Section title="Model Source">
               <Field label="Type" required>
@@ -407,7 +406,6 @@ export function CreateModelDeploymentTemplate({
                   ))}
                 </select>
               </Field>
-              {!isOnDemand && (
               <Field label="URI" wide required>
                 {(() => {
                   const uri = spec.modelSource?.uri ?? '';
@@ -432,7 +430,6 @@ export function CreateModelDeploymentTemplate({
                   );
                 })()}
               </Field>
-              )}
               {isHF && (
                 <Field label="Revision">
                   <input
