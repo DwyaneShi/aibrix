@@ -35,8 +35,8 @@ function bumpVersion(v: string): string {
   return `${v}-2`;
 }
 
-const ENGINE_TYPES = ['vllm', 'sglang', 'trtllm'];
-const MODEL_SOURCE_TYPES = ['huggingface', 's3', 'local', 'hdfs'];
+const ENGINE_TYPES = ['vllm', 'sglang', 'trtllm', 'vipe'];
+const MODEL_SOURCE_TYPES = ['huggingface', 's3', 'local', 'hdfs', 'on-demand-loading'];
 
 // Per-source URI validation. Returns an error message or '' when valid.
 // Empty URI is accepted here; the form-level required check belongs elsewhere.
@@ -146,6 +146,7 @@ const KNOWN_ENGINE_ARGS_BY_ENGINE: Record<string, KnownKnob[]> = {
   // sglang / trtllm: pending curation — fall through to custom editor for now.
   sglang: [],
   trtllm: [],
+  vipe: [],
 };
 function knownArgsFor(engineType: string | undefined): KnownKnob[] {
   return KNOWN_ENGINE_ARGS_BY_ENGINE[(engineType ?? '').trim().toLowerCase()] ?? [];
@@ -242,7 +243,7 @@ export function CreateModelDeploymentTemplate({
       setError('Version is required');
       return;
     }
-    if (!spec.modelSource?.uri?.trim()) {
+    if (!spec.modelSource?.uri?.trim() && spec.modelSource?.type !== 'on-demand-loading') {
       setError('Model source URI is required');
       return;
     }
@@ -392,6 +393,7 @@ export function CreateModelDeploymentTemplate({
           const sourceType = spec.modelSource?.type ?? 'huggingface';
           const hint = authHint(sourceType);
           const isHF = sourceType === 'huggingface';
+          const isOnDemand = sourceType === 'on-demand-loading';
           return (
             <Section title="Model Source">
               <Field label="Type" required>
@@ -405,6 +407,7 @@ export function CreateModelDeploymentTemplate({
                   ))}
                 </select>
               </Field>
+              {!isOnDemand && (
               <Field label="URI" wide required>
                 {(() => {
                   const uri = spec.modelSource?.uri ?? '';
@@ -429,6 +432,7 @@ export function CreateModelDeploymentTemplate({
                   );
                 })()}
               </Field>
+              )}
               {isHF && (
                 <Field label="Revision">
                   <input
