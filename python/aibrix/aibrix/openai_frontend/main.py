@@ -15,6 +15,7 @@
 
 import argparse
 import importlib
+import json
 import logging
 import os
 import signal
@@ -160,10 +161,65 @@ def build_vipe_engine(args: argparse.Namespace) -> LLMEngine:
     )
 
 
+def add_proxy_args(parser: argparse.ArgumentParser):
+    proxy_group = parser.add_argument_group("Proxy engine arguments")
+    proxy_group.add_argument(
+        "--proxy-engine-cmd",
+        type=str,
+        nargs="+",
+        required=True,
+        help="Command to launch the inner engine as a subprocess "
+        "(e.g. --proxy-engine-cmd python -m vllm.entrypoints.openai.api_server)",
+    )
+    proxy_group.add_argument(
+        "--proxy-engine-host",
+        type=str,
+        default="127.0.0.1",
+        help="Host for the inner engine HTTP server (default: 127.0.0.1)",
+    )
+    proxy_group.add_argument(
+        "--proxy-engine-port",
+        type=int,
+        default=8001,
+        help="Port for the inner engine HTTP server (default: 8001)",
+    )
+    proxy_group.add_argument(
+        "--proxy-engine-spec",
+        type=str,
+        default="vllm",
+        help="Engine spec for endpoint mapping (default: vllm). "
+        "Determines which OpenAI APIs the inner engine supports "
+        "and their endpoint paths.",
+    )
+    proxy_group.add_argument(
+        "--proxy-credentials",
+        type=str,
+        default="{}",
+        help="JSON string mapping URL patterns to credential dicts "
+        '(e.g. \'{"https://cdn.example.com/*": {"headers": {"Authorization": "Bearer token123"}}}\')',
+    )
+
+
+def build_proxy_engine(args: argparse.Namespace) -> LLMEngine:
+    from aibrix.openai_frontend.engine.proxy_engine import ProxyEngine
+    from aibrix.openai_frontend.proxy.engine_spec import get_engine_spec
+
+    credentials_map = json.loads(args.proxy_credentials)
+    spec = get_engine_spec(args.proxy_engine_spec)
+    return ProxyEngine(
+        engine_cmd=args.proxy_engine_cmd,
+        engine_port=args.proxy_engine_port,
+        engine_host=args.proxy_engine_host,
+        spec=spec,
+        credentials_map=credentials_map,
+    )
+
+
 ENGINE_REGISTRY: Dict[
     str, Tuple[EngineBuilder, Callable[[argparse.ArgumentParser], None]]
 ] = {
     "vipe": (build_vipe_engine, add_vipe_args),
+    "proxy": (build_proxy_engine, add_proxy_args),
 }
 
 

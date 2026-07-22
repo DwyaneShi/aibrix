@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from typing import AsyncIterator, Iterator, List, Protocol, Union
 
+from fastapi import Response
+
 from aibrix.openai_frontend.schemas.openai import (
     CreateChatCompletionRequest,
     CreateChatCompletionResponse,
@@ -61,7 +63,7 @@ class LLMEngine(Protocol):
         """
         pass
 
-    async def models(self) -> List[Model]:
+    async def models(self) -> Union[List[Model], Response]:
         """
         Returns a List of OpenAI Model objects.
         """
@@ -69,7 +71,9 @@ class LLMEngine(Protocol):
 
     async def chat(
         self, request: CreateChatCompletionRequest
-    ) -> Union[CreateChatCompletionResponse, Iterator[str], AsyncIterator[str]]:
+    ) -> Union[
+        CreateChatCompletionResponse, Iterator[str], AsyncIterator[str], Response
+    ]:
         """
         If request.stream is True, this returns an Iterator (or Generator) that
         produces server-sent-event (SSE) strings in the following form:
@@ -83,7 +87,7 @@ class LLMEngine(Protocol):
 
     async def completion(
         self, request: CreateCompletionRequest
-    ) -> Union[CreateCompletionResponse, Iterator[str], AsyncIterator[str]]:
+    ) -> Union[CreateCompletionResponse, Iterator[str], AsyncIterator[str], Response]:
         """
         If request.stream is True, this returns an Iterator (or Generator) that
         produces server-sent-event (SSE) strings in the following form:
@@ -97,13 +101,13 @@ class LLMEngine(Protocol):
 
     async def embedding(
         self, request: CreateEmbeddingRequest
-    ) -> CreateEmbeddingResponse:
+    ) -> Union[CreateEmbeddingResponse, Response]:
         """
         Returns a CreateEmbeddingResponse.
         """
         pass
 
-    async def load_model(self, model_name: str) -> Model:
+    async def load_model(self, model_name: str) -> Union[Model, Response]:
         """
         Loads a model by name. Only available in EXPLICIT model control mode.
         Blocks until the model is fully loaded and ready.

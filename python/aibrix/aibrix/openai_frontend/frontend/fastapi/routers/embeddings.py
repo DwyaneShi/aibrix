@@ -26,8 +26,8 @@
 
 import traceback
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+import httpx
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from aibrix.openai_frontend.schemas.openai import (
     CreateEmbeddingRequest,
@@ -43,7 +43,7 @@ router = APIRouter()
 )
 async def create_embedding(
     request: CreateEmbeddingRequest, raw_request: Request
-) -> CreateEmbeddingResponse | StreamingResponse:
+) -> CreateEmbeddingResponse | Response:
     """
     Creates embedding for the provided input text.
     """
@@ -54,9 +54,13 @@ async def create_embedding(
 
     try:
         response = await raw_request.app.engine.embedding(request)
+        if isinstance(response, Response):
+            return response
         return response
     except ClientError as e:
         raise HTTPException(status_code=StatusCode.CLIENT_ERROR, detail=f"{e}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except NotImplementedError as e:
         raise HTTPException(status_code=StatusCode.NOT_FOUND, detail=f"{e}")
     except ServerError as e:

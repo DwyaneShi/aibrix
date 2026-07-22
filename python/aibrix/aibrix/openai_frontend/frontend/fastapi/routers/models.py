@@ -24,9 +24,8 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from typing import List
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from aibrix.openai_frontend.schemas.openai import ListModelsResponse, Model, ObjectType
 from aibrix.openai_frontend.utils.utils import StatusCode
@@ -37,7 +36,7 @@ OWNED_BY = "Inference Server"
 
 
 @router.get("/v1/models", response_model=ListModelsResponse, tags=["Models"])
-async def list_models(request: Request) -> ListModelsResponse:
+async def list_models(request: Request) -> ListModelsResponse | Response:
     """
     Lists the currently available models, and provides basic information about each one such as the owner and availability.
     """
@@ -46,7 +45,9 @@ async def list_models(request: Request) -> ListModelsResponse:
             status_code=StatusCode.SERVER_ERROR, detail="No attached inference engine"
         )
 
-    models: List[Model] = await request.app.engine.models()
+    models = await request.app.engine.models()
+    if isinstance(models, Response):
+        return models
     return ListModelsResponse(object=ObjectType.list, data=models)
 
 
@@ -60,8 +61,21 @@ async def retrieve_model(request: Request, model_name: str) -> Model:
             status_code=StatusCode.SERVER_ERROR, detail="No attached inference engine"
         )
 
-    # TODO: Return model directly from engine instead of searching models
-    models: List[Model] = await request.app.engine.models()
+    result = await request.app.engine.models()
+    if isinstance(result, Response):
+        import json
+
+        try:
+            data = json.loads(result.body)
+        except Exception:
+            raise HTTPException(
+                status_code=StatusCode.SERVER_ERROR,
+                detail="Failed to parse models response",
+            )
+        models = [Model.model_validate(m) for m in data.get("data", [])]
+    else:
+        models = result
+
     for model in models:
         if model.id == model_name:
             return model

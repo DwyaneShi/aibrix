@@ -26,7 +26,8 @@
 
 import traceback
 
-from fastapi import APIRouter, HTTPException, Request
+import httpx
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from aibrix.openai_frontend.schemas.openai import (
@@ -43,7 +44,7 @@ router = APIRouter()
 )
 async def create_completion(
     request: CreateCompletionRequest, raw_request: Request
-) -> CreateCompletionResponse | StreamingResponse:
+) -> CreateCompletionResponse | StreamingResponse | Response:
     """
     Creates a completion for the provided prompt and parameters.
     """
@@ -54,11 +55,15 @@ async def create_completion(
 
     try:
         response = await raw_request.app.engine.completion(request)
+        if isinstance(response, Response):
+            return response
         if request.stream:
             return StreamingResponse(response, media_type="text/event-stream")
         return response
     except ClientError as e:
         raise HTTPException(status_code=StatusCode.CLIENT_ERROR, detail=f"{e}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except NotImplementedError as e:
         raise HTTPException(status_code=StatusCode.NOT_FOUND, detail=f"{e}")
     except ServerError as e:

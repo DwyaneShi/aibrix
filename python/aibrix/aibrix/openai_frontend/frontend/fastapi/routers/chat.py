@@ -26,7 +26,8 @@
 
 import traceback
 
-from fastapi import APIRouter, HTTPException, Request
+import httpx
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from aibrix.openai_frontend.schemas.openai import (
@@ -44,7 +45,7 @@ router = APIRouter()
 async def create_chat_completion(
     request: CreateChatCompletionRequest,
     raw_request: Request,
-) -> CreateChatCompletionResponse | StreamingResponse:
+) -> CreateChatCompletionResponse | StreamingResponse | Response:
     """
     Creates a chat completion for the provided messages and parameters.
     """
@@ -55,11 +56,15 @@ async def create_chat_completion(
 
     try:
         response = await raw_request.app.engine.chat(request)
+        if isinstance(response, Response):
+            return response
         if request.stream:
             return StreamingResponse(response, media_type="text/event-stream")
         return response
     except ClientError as e:
         raise HTTPException(status_code=StatusCode.CLIENT_ERROR, detail=f"{e}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except NotImplementedError as e:
         raise HTTPException(status_code=StatusCode.NOT_FOUND, detail=f"{e}")
     except ServerError as e:

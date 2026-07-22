@@ -26,7 +26,7 @@
 
 import traceback
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from aibrix.openai_frontend.schemas.openai import Model
 from aibrix.openai_frontend.utils.utils import ClientError, ServerError, StatusCode
@@ -39,7 +39,7 @@ router = APIRouter()
     response_model=Model,
     tags=["Model Management"],
 )
-async def load_model(model_name: str, raw_request: Request) -> Model:
+async def load_model(model_name: str, raw_request: Request) -> Model | Response:
     """
     Loads a model by name. Only available in EXPLICIT model control mode.
     Blocks until the model is fully loaded and ready.
@@ -51,7 +51,10 @@ async def load_model(model_name: str, raw_request: Request) -> Model:
         )
 
     try:
-        return await raw_request.app.engine.load_model(model_name)
+        result = await raw_request.app.engine.load_model(model_name)
+        if isinstance(result, Response):
+            return result
+        return result
     except ClientError as e:
         raise HTTPException(status_code=StatusCode.CLIENT_ERROR, detail=f"{e}")
     except NotImplementedError as e:
