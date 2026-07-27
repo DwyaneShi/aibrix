@@ -48,8 +48,15 @@ from aibrix.logger import init_logger
 logger = init_logger(__name__)
 
 _DEFAULT_NAMESPACE = "default"
+_MIN_READY_REPLICAS = 1
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 600.0
+_MIN_REQUEST_TIMEOUT_SECONDS = 1.0
 _MODEL_DISCOVERY_WAIT_SLICE_SECONDS = 10.0
 _GET_RESPONSE_LOG_SUPPRESSION_MIN_WINDOW_SECONDS = 30.0
+_PSM_SERVICE_IDC_MAX_SPLITS = 1
+_CONSUL_IDC_ALIASES = {
+    "aliyun_va": "maliva",
+}
 
 
 @dataclass
@@ -61,6 +68,7 @@ class OctagramHandle:
     psm: Optional[str]
     base_url: Optional[str]
     replicas: int
+    request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS
     source: Optional[EndpointSource] = None
 
 
@@ -135,7 +143,6 @@ class OctagramRuntime(RuntimeBase):
     async def _load_handle(
         self, job: BatchJob, job_id: str, execution: JobRuntimeRef
     ) -> OctagramHandle | None:
-        del job
         reconnect_payload = execution.reconnect_payload or {}
         cluster = reconnect_payload.get("cluster")
         namespace = reconnect_payload.get("namespace")
@@ -166,6 +173,7 @@ class OctagramRuntime(RuntimeBase):
             psm=psm,
             base_url=base_url,
             replicas=replicas,
+            request_timeout_seconds=self._resolve_request_timeout_seconds(job),
         )
         self._active_handle = handle
         logger.info(
@@ -225,6 +233,7 @@ class OctagramRuntime(RuntimeBase):
             psm=psm,
             base_url=self._resolve_direct_base_url(job),
             replicas=replicas,
+            request_timeout_seconds=self._resolve_request_timeout_seconds(job),
         )
         self._active_handle = handle
         await self._apply_workload(cluster, namespace, workload)
@@ -272,6 +281,7 @@ class OctagramRuntime(RuntimeBase):
             handle.source = GatewayEndpointSource(
                 handle.base_url,
                 capacity=max(handle.replicas, 1),
+                timeout=handle.request_timeout_seconds,
             )
         else:
             model_discovery = self._context.model_discovery
@@ -284,7 +294,7 @@ class OctagramRuntime(RuntimeBase):
                 model_discovery,
                 handle.model_name,
                 service_id=handle.psm,
-                timeout=30.0,
+                timeout=handle.request_timeout_seconds,
             )
         return Endpoint(
             source=cast(Optional[EndpointSource], handle.source),
@@ -360,14 +370,61 @@ class OctagramRuntime(RuntimeBase):
             return str(job.spec.opts[constant.BATCH_OPTS_RESOURCE_ENDPOINT])
         return None
 
+    def _resolve_request_timeout_seconds(self, job: BatchJob) -> float:
+        client = job.spec.aibrix.client if job.spec.aibrix else None
+        client_timeout = getattr(client, "request_timeout_seconds", None)
+        if client_timeout is not None:
+            return max(
+                float(client_timeout),
+                _MIN_REQUEST_TIMEOUT_SECONDS,
+            )
+
+        try:
+            profile_ref = job.spec.aibrix.profile if job.spec.aibrix else None
+            profile = self._renderer._resolve_profile(profile_ref)
+            return max(
+                float(profile.spec.scheduling.request_timeout_seconds),
+                _MIN_REQUEST_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve Octagram request timeout; using default",
+                job_id=job.job_id,
+                default_timeout_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                error=str(exc),
+            )  # type: ignore[call-arg]
+            return _DEFAULT_REQUEST_TIMEOUT_SECONDS
+
     def _resolve_psm(self, workload: dict[str, Any]) -> Optional[str]:
         labels = workload["metadata"].get("labels", {})
         psm = labels.get("psm")
         if not psm:
             return None
         idc_name = getattr(self._renderer, "idc_name", "")
-        consul_idc_name = idc_name.lower()
-        return f"{psm}.service.{consul_idc_name}" if consul_idc_name else psm
+        return self._normalize_psm_service_idc(psm, idc_name)
+
+    def _normalize_consul_idc_name(self, idc_name: str) -> str:
+        normalized = idc_name.lower()
+        for source, target in _CONSUL_IDC_ALIASES.items():
+            if normalized == source:
+                return target
+            prefix = f"{source}."
+            if normalized.startswith(prefix):
+                return f"{target}.{normalized[len(prefix) :]}"
+        return normalized
+
+    def _normalize_psm_service_idc(self, psm: str, idc_name: str) -> str:
+        if ".service." in psm:
+            prefix, existing_idc = psm.rsplit(".service.", _PSM_SERVICE_IDC_MAX_SPLITS)
+            normalized_idc = self._normalize_consul_idc_name(existing_idc)
+            return f"{prefix}.service.{normalized_idc}"
+
+        normalized_idc = self._normalize_consul_idc_name(idc_name)
+        if not normalized_idc:
+            return psm
+        if psm.endswith(".service"):
+            return f"{psm}.{normalized_idc}"
+        return f"{psm}.service.{normalized_idc}"
 
     async def _apply_workload(
         self, cluster: str, namespace: str, workload: dict[str, Any]
@@ -473,12 +530,10 @@ class OctagramRuntime(RuntimeBase):
                 available = max(
                     int(item.get("available") or 0) for item in replicas_statuses
                 )
-                if (replicas == 0 and available == 0) or (
-                    replicas > 0 and available >= replicas
-                ):
-                    # If explected replica is 0, we need to wait for available to become 0,
-                    # otherwise we need to wait for available to become >= replicas.
-                    # Note: replicas == 0 and available == 0 is here to maintain logic correctness.
+                required_available = min(replicas, _MIN_READY_REPLICAS)
+                if replicas > 0 and available >= required_available:
+                    # A positive workload is ready once the configured minimum is
+                    # available, capped by the requested replica count.
                     return
             if asyncio.get_running_loop().time() >= deadline:
                 raise BatchJobError(

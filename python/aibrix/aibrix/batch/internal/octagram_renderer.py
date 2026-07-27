@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import Any, Callable, Dict, List, Optional
@@ -16,13 +17,73 @@ from aibrix.logger import init_logger
 
 logger = init_logger(__name__)
 
+# Renderer defaults.
 _DEFAULT_NAMESPACE = "default"
 _DEFAULT_TCE_ENV = "prod"
 _DEFAULT_TCE_STAGE = "all_dc"
 _DEFAULT_TCE_PRIMARY_PORT = "fake_port"
-_DEFAULT_VOLUME_CAPACITY = "10000Gi"
 _DEFAULT_IDENTITY_TREATMENT_USER = getattr(
     envs, "OCTAGRAM_IDENTITY_USER", "jingyuan.zhang0929"
+)
+
+# Compatibility fallbacks for callers that bypass the Console planner.
+_FALLBACK_CPU_CORES_PER_GPU = 16
+_FALLBACK_MEMORY_GIB_PER_GPU = 96
+
+# TCE filesystem and container lifecycle contract.
+_BERNARD_HOST_PATH = "/opt/tiger/bernard"
+_BERNARD_TOOLS_HOST_PATH = f"{_BERNARD_HOST_PATH}/bernard_tools"
+_TCE_TOOLS_MOUNT_PATH = "/opt/tiger/tce/tce_tools"
+_TCE_TOOLS_BIN_PATH = f"{_TCE_TOOLS_MOUNT_PATH}/bin"
+_PRE_STOP_COMMAND = (
+    "bash",
+    "-c",
+    (f"{_TCE_TOOLS_BIN_PATH}/pre_stop; /home/tiger/.op/docker_pre_stop.sh;"),
+)
+
+
+@dataclass(frozen=True)
+class _ExecProbeConfig:
+    command: tuple[str, ...]
+    failure_threshold: int
+    period_seconds: int
+    initial_delay_seconds: Optional[int] = None
+    success_threshold: int = 1
+    timeout_seconds: int = 30
+
+    def to_manifest(self) -> Dict[str, Any]:
+        probe: Dict[str, Any] = {"exec": {"command": list(self.command)}}
+        if self.initial_delay_seconds is not None:
+            probe["initialDelaySeconds"] = self.initial_delay_seconds
+        probe.update(
+            {
+                "failureThreshold": self.failure_threshold,
+                "periodSeconds": self.period_seconds,
+                "successThreshold": self.success_threshold,
+                "timeoutSeconds": self.timeout_seconds,
+            }
+        )
+        return probe
+
+
+_LIVENESS_PROBE = _ExecProbeConfig(
+    command=(
+        "bash",
+        "-c",
+        f"{_BERNARD_TOOLS_HOST_PATH}/bin/liveness_check.sh",
+    ),
+    initial_delay_seconds=180,
+    failure_threshold=5,
+    period_seconds=60,
+)
+_READINESS_PROBE = _ExecProbeConfig(
+    command=(
+        "bash",
+        "-c",
+        f"{_TCE_TOOLS_BIN_PATH}/readiness_check.sh",
+    ),
+    failure_threshold=2,
+    period_seconds=20,
 )
 
 
@@ -64,35 +125,12 @@ _BASE_FEATURE_GATES = [
 ]
 
 _VOLUME_MOUNTS = [
-    {"name": "bernard", "mountPath": "/opt/tiger/bernard", "readOnly": True},
+    {"name": "bernard", "mountPath": _BERNARD_HOST_PATH, "readOnly": True},
     {
         "name": "bernard-tce-tools",
-        "mountPath": "/opt/tiger/tce/tce_tools",
+        "mountPath": _TCE_TOOLS_MOUNT_PATH,
         "readOnly": True,
     },
-    {"name": "cgroups", "mountPath": "/sys/fs/cgroup", "readOnly": True},
-    {"name": "chadc", "mountPath": "/opt/tiger/chadc", "readOnly": True},
-    {
-        "name": "consul-deploy",
-        "mountPath": "/opt/tiger/consul_deploy",
-        "readOnly": True,
-    },
-    {"name": "core", "mountPath": "/opt/tiger/cores", "readOnly": True},
-    {"name": "databus", "mountPath": "/tmp"},
-    {"name": "databus-new", "mountPath": "/opt/tmp", "readOnly": True},
-    {"name": "dist", "mountPath": "/opt/tiger/dist/", "readOnly": True},
-    {
-        "name": "host-usr-local-tao-agent-modules-bvc",
-        "mountPath": "/usr/local/tao/agent/modules/bvc/",
-        "readOnly": True,
-    },
-    {"name": "jdk", "mountPath": "/opt/tiger/jdk", "readOnly": True},
-    {
-        "name": "linux-gnu",
-        "mountPath": "/opt/tiger/x86_64-linux-gnu",
-        "readOnly": True,
-    },
-    {"name": "network", "mountPath": "/opt/tiger/tce/network", "readOnly": True},
     {
         "name": "opt-tiger-data-log",
         "mountPath": "/opt/tiger/data/log",
@@ -103,21 +141,7 @@ _VOLUME_MOUNTS = [
         "mountPath": "/opt/tiger/toutiao/log",
         "subPath": "$(MY_POD_NAME)/toutiao/log",
     },
-    {"name": "pyutil", "mountPath": "/opt/tiger/pyutil", "readOnly": True},
     {"name": "run", "mountPath": "/run"},
-    {"name": "run-lock", "mountPath": "/run/lock", "readOnly": True},
-    {"name": "ss-bin", "mountPath": "/opt/tiger/ss_bin", "readOnly": True},
-    {"name": "sys", "mountPath": "/sys", "readOnly": True},
-    {
-        "name": "sys-resolv-conf",
-        "mountPath": "/etc/resolv.conf",
-        "readOnly": True,
-    },
-    {
-        "name": "tce-tools-binary",
-        "mountPath": "/opt/tiger/tce/tce_tools/bin/binary",
-        "readOnly": True,
-    },
     {
         "name": "var-log-tiger",
         "mountPath": "/var/log/tiger",
@@ -127,47 +151,15 @@ _VOLUME_MOUNTS = [
 ]
 
 _VOLUMES = [
-    {"name": "bernard", "hostPath": {"path": "/opt/tiger/bernard", "type": ""}},
+    {
+        "name": "bernard",
+        "hostPath": {"path": _BERNARD_HOST_PATH, "type": ""},
+    },
     {
         "name": "bernard-tce-tools",
-        "hostPath": {"path": "/opt/tiger/bernard/bernard_tools", "type": ""},
+        "hostPath": {"path": _BERNARD_TOOLS_HOST_PATH, "type": ""},
     },
-    {"name": "cgroups", "hostPath": {"path": "/sys/fs/cgroup", "type": ""}},
-    {"name": "chadc", "hostPath": {"path": "/opt/tiger/chadc", "type": ""}},
-    {
-        "name": "consul-deploy",
-        "hostPath": {"path": "/opt/tiger/consul_deploy", "type": ""},
-    },
-    {
-        "name": "core",
-        "hostPath": {"path": "/opt/tiger/cores", "type": "DirectoryOrCreate"},
-    },
-    {"name": "databus", "hostPath": {"path": "/tmp", "type": ""}},
-    {"name": "databus-new", "hostPath": {"path": "/opt/tmp", "type": ""}},
-    {"name": "dist", "hostPath": {"path": "/opt/tiger/dist/", "type": ""}},
-    {
-        "name": "host-usr-local-tao-agent-modules-bvc",
-        "hostPath": {"path": "/usr/local/tao/agent/modules/bvc/", "type": ""},
-    },
-    {"name": "jdk", "hostPath": {"path": "/opt/tiger/jdk", "type": ""}},
-    {
-        "name": "linux-gnu",
-        "hostPath": {"path": "/usr/lib/x86_64-linux-gnu", "type": ""},
-    },
-    {
-        "name": "network",
-        "hostPath": {"path": "/opt/tiger/tce/network", "type": ""},
-    },
-    {"name": "pyutil", "hostPath": {"path": "/opt/tiger/pyutil", "type": ""}},
     {"name": "run", "emptyDir": {"medium": "Memory", "sizeLimit": "64Mi"}},
-    {"name": "run-lock", "hostPath": {"path": "/run/lock", "type": ""}},
-    {"name": "ss-bin", "hostPath": {"path": "/opt/tiger/ss_bin", "type": ""}},
-    {"name": "sys", "hostPath": {"path": "/sys", "type": ""}},
-    {"name": "sys-resolv-conf", "hostPath": {"path": "/etc/resolv.conf", "type": ""}},
-    {
-        "name": "tce-tools-binary",
-        "hostPath": {"path": "/opt/tiger/tce/tce_tools/bin/binary", "type": ""},
-    },
     {"name": "yarn-deploy", "hostPath": {"path": "/opt/tiger/yarn_deploy", "type": ""}},
 ]
 
@@ -189,11 +181,7 @@ def _volumes(psm: Optional[str]) -> List[Dict[str, Any]]:
         {"name": "opt-tiger-toutiao-log", "hostPath": _log_host_path(psm)},
         {"name": "var-log-tiger", "hostPath": _log_host_path(psm)},
     ]
-    insert_at = next(
-        (index for index, volume in enumerate(volumes) if volume["name"] == "pyutil"),
-        len(volumes),
-    )
-    volumes[insert_at:insert_at] = log_volumes
+    volumes.extend(log_volumes)
     return volumes
 
 
@@ -228,15 +216,15 @@ class OctagramManifestRenderer(_RendererSupport):
 
         container_name = job_name
         resource = providerSpec.resource
-        # Short-term: until the deployment template carries explicit cpu/memory,
-        # derive pod requests from a fixed per-GPU ratio (16 cores + 96Gi/GPU).
-        # Only fill when absent so future template-provided values win.
+        # Keep default resource sizing at the renderer boundary instead of
+        # duplicating backend-specific defaults in the Console planner.
+        # Explicit resource allocation values still take precedence.
         gpu_count = resource.accelerator_count or 0
         if gpu_count > 0:
             if not resource.cpu:
-                resource.cpu = str(gpu_count * 16)
+                resource.cpu = str(gpu_count * _FALLBACK_CPU_CORES_PER_GPU)
             if not resource.memory:
-                resource.memory = f"{gpu_count * 96}Gi"
+                resource.memory = f"{gpu_count * _FALLBACK_MEMORY_GIB_PER_GPU}Gi"
         model_name = infer_model_name(template.spec.model_source.uri).lower()
         served_model_name = f"{job_name}-{model_name}"
         console_job_id = spec.aibrix.job_id if spec.aibrix else None
@@ -475,42 +463,11 @@ class OctagramManifestRenderer(_RendererSupport):
                     ],
                     "resources": self._container_resources(resource),
                     "volumeMounts": deepcopy(_VOLUME_MOUNTS),
-                    "livenessProbe": {
-                        "exec": {
-                            "command": [
-                                "bash",
-                                "-c",
-                                "/opt/tiger/bernard/bernard_tools/bin/liveness_check.sh",
-                            ]
-                        },
-                        "initialDelaySeconds": 180,
-                        "failureThreshold": 5,
-                        "periodSeconds": 60,
-                        "successThreshold": 1,
-                        "timeoutSeconds": 30,
-                    },
-                    "readinessProbe": {
-                        "exec": {
-                            "command": [
-                                "bash",
-                                "-c",
-                                "/opt/tiger/tce/tce_tools/bin/readiness_check.sh",
-                            ]
-                        },
-                        "failureThreshold": 2,
-                        "periodSeconds": 20,
-                        "successThreshold": 1,
-                        "timeoutSeconds": 30,
-                    },
+                    "livenessProbe": _LIVENESS_PROBE.to_manifest(),
+                    "readinessProbe": _READINESS_PROBE.to_manifest(),
                     "lifecycle": {
                         "preStop": {
-                            "exec": {
-                                "command": [
-                                    "bash",
-                                    "-c",
-                                    "/opt/tiger/tce/tce_tools/bin/pre_stop; /home/tiger/.op/docker_pre_stop.sh;",
-                                ]
-                            }
+                            "exec": {"command": list(_PRE_STOP_COMMAND)},
                         }
                     },
                 }

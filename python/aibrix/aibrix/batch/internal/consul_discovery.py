@@ -1,5 +1,8 @@
 import asyncio
+import ast
 import os
+import shutil
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -13,7 +16,15 @@ from aibrix.logger import init_logger
 _DEFAULT_LOOKUP_TIMEOUT_SECONDS = 1.0
 _DEFAULT_REFRESH_INTERVAL_SECONDS = 3.0
 _DEFAULT_PRIORITY_REFRESH_INTERVAL_SECONDS = 0.1
-_DEFAULT_FILTER_TAGS = ("aibrix_served_model_name",)
+_MIN_SDK_LOOKUP_TIMEOUT_SECONDS = 1
+_SD_LOOKUP_MAX_SPLITS = 2
+_SD_LOOKUP_FIELD_COUNT = 3
+_SERVED_MODEL_TAG = "aibrix_served_model_name"
+_MODEL_INFO_TAG = "model_info"
+_MODEL_INFO_MAX_SPLITS = 1
+_MODEL_INFO_FIELD_COUNT = 2
+_MODEL_INFO_SERVED_MODEL_INDEX = 1
+_DEFAULT_FILTER_TAGS = (_SERVED_MODEL_TAG,)
 _RAW_SNAPSHOT_KEY: tuple[tuple[str, str], ...] = ()
 
 logger = init_logger(__name__)
@@ -275,11 +286,7 @@ class ConsulDiscoveryService:
 
     def _refresh_psm(self, psm: str, lookup_timeout_seconds: float) -> None:
         """Fetch one PSM from Consul and rebuild all cached categories for it."""
-        response_payload = self._client.lookup_name(
-            psm,
-            timeout=max(1, int(lookup_timeout_seconds)),
-        )
-        endpoints = [self._parse_endpoint(item) for item in response_payload]
+        endpoints = self._lookup_endpoints(psm, lookup_timeout_seconds)
         with self._cache_lock:
             previous_signature = self._endpoint_signature(
                 self._raw_endpoints.get(psm, [])
@@ -310,6 +317,32 @@ class ConsulDiscoveryService:
             self._categorized_endpoints[psm] = categorized
             self._refresh_round_by_psm[psm] = self._refresh_round_by_psm.get(psm, 0) + 1
             self._refresh_condition.notify_all()
+
+    def _lookup_endpoints(
+        self, psm: str, lookup_timeout_seconds: float
+    ) -> list[ConsulInferenceEndpoint]:
+        try:
+            response_payload = list(
+                self._client.lookup_name(
+                    psm,
+                    timeout=max(
+                        _MIN_SDK_LOOKUP_TIMEOUT_SECONDS,
+                        int(lookup_timeout_seconds),
+                    ),
+                )
+                or []
+            )
+        except Exception as exc:
+            logger.warning(
+                "Consul SDK lookup failed; falling back to sd lookup",
+                psm=psm,
+                error=str(exc),
+            )  # type: ignore[call-arg]
+            response_payload = []
+
+        if response_payload:
+            return [self._parse_endpoint(item) for item in response_payload]
+        return self._lookup_sd_cli_endpoints(psm, lookup_timeout_seconds)
 
     def _lookup_timeout_seconds(self) -> float:
         """Return the default per-request lookup timeout, widened in debug mode."""
@@ -478,7 +511,7 @@ class ConsulDiscoveryService:
     ) -> dict[str, str]:
         """Ensure every query includes the default model-name tag filter."""
         normalized = dict(filter_tags or {})
-        normalized.setdefault("aibrix_served_model_name", served_model_name)
+        normalized.setdefault(_SERVED_MODEL_TAG, served_model_name)
         return normalized
 
     def _category_key(
@@ -566,8 +599,78 @@ class ConsulDiscoveryService:
             return tags
         return {}
 
+    def _lookup_sd_cli_endpoints(
+        self,
+        psm: str,
+        lookup_timeout_seconds: float,
+    ) -> list[ConsulInferenceEndpoint]:
+        sd_path = shutil.which("sd")
+        if sd_path is None:
+            return []
+        try:
+            result = subprocess.run(
+                [sd_path, "lookup", psm],
+                capture_output=True,
+                text=True,
+                timeout=lookup_timeout_seconds,
+                check=False,
+            )
+        except Exception:
+            return []
+        return self._parse_sd_lookup_stdout(result.stdout)
+
+    def _parse_sd_lookup_stdout(self, stdout: str) -> list[ConsulInferenceEndpoint]:
+        endpoints: list[ConsulInferenceEndpoint] = []
+        for line in stdout.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            parts = stripped.split(None, _SD_LOOKUP_MAX_SPLITS)
+            if len(parts) != _SD_LOOKUP_FIELD_COUNT:
+                continue
+            host, port_text, tags_text = parts
+            if host in {"IP", "Canonical", "Service", "Data"}:
+                continue
+            try:
+                port = int(port_text)
+            except ValueError:
+                continue
+            try:
+                tags = ast.literal_eval(tags_text)
+            except (ValueError, SyntaxError):
+                tags = {}
+            endpoints.append(
+                ConsulInferenceEndpoint(
+                    host=host,
+                    port=port,
+                    tags=self._normalize_tags(tags),
+                )
+            )
+        return endpoints
+
     def _tag_value(self, tags: dict[str, str], key: str) -> str:
         """Read one tag value with case-insensitive fallback for inconsistent inputs."""
+        if key in tags:
+            return tags[key].strip()
+        canonical_key = key.lower()
+        for current_key, current_value in tags.items():
+            if current_key.lower() == canonical_key:
+                return current_value.strip()
+        if canonical_key == _SERVED_MODEL_TAG:
+            return self._served_model_name_from_model_info(tags)
+        return ""
+
+    def _served_model_name_from_model_info(self, tags: dict[str, str]) -> str:
+        model_info = self._tag_value_case_insensitive(tags, _MODEL_INFO_TAG)
+        if not model_info:
+            return ""
+        # Worker registrations use model_info="<engine>|<served_model_name>".
+        parts = model_info.split("|", _MODEL_INFO_MAX_SPLITS)
+        if len(parts) != _MODEL_INFO_FIELD_COUNT:
+            return ""
+        return parts[_MODEL_INFO_SERVED_MODEL_INDEX].strip()
+
+    def _tag_value_case_insensitive(self, tags: dict[str, str], key: str) -> str:
         if key in tags:
             return tags[key].strip()
         canonical_key = key.lower()

@@ -1,6 +1,7 @@
 import json
 import sys
 import types
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,24 @@ from aibrix.batch.job_entity import (
 
 _TESTDATA_DIR = Path(__file__).resolve().parents[1] / "testdata"
 _FIXED_NOW = datetime(2026, 5, 22, 18, 0, tzinfo=timezone.utc)
+_RENDERED_VOLUME_MOUNT_NAMES = (
+    "bernard",
+    "bernard-tce-tools",
+    "opt-tiger-data-log",
+    "opt-tiger-toutiao-log",
+    "run",
+    "var-log-tiger",
+    "yarn-deploy",
+)
+_RENDERED_VOLUME_NAMES = (
+    "bernard",
+    "bernard-tce-tools",
+    "run",
+    "yarn-deploy",
+    "opt-tiger-data-log",
+    "opt-tiger-toutiao-log",
+    "var-log-tiger",
+)
 
 
 def _template_spec(service_id: str | None = "inf.aibrix.platform"):
@@ -196,14 +215,32 @@ def _load_testdata_yaml(name: str):
     return yaml.safe_load((_TESTDATA_DIR / name).read_text())
 
 
+def _filter_named_items(items: list[dict], names: tuple[str, ...]) -> list[dict]:
+    item_by_name = {item["name"]: item for item in items}
+    return [item_by_name[name] for name in names]
+
+
+def _normalize_rendered_volume_contract(snapshot: dict) -> dict:
+    expected = deepcopy(snapshot)
+    pod_base = expected["spec"]["podBase"]
+    container = pod_base["containers"][0]
+    container["volumeMounts"] = _filter_named_items(
+        container["volumeMounts"], _RENDERED_VOLUME_MOUNT_NAMES
+    )
+    pod_base["volumes"] = _filter_named_items(
+        pod_base["volumes"], _RENDERED_VOLUME_NAMES
+    )
+    return expected
+
+
 def _normalized_request_snapshot_yaml():
     expected = _load_testdata_yaml("deploymentworkload_example_request.yaml")
-    return expected
+    return _normalize_rendered_volume_contract(expected)
 
 
 def _normalized_xpu_request_snapshot_yaml():
     expected = _load_testdata_yaml("deploymentworkload_example_request_xpu.yaml")
-    return expected
+    return _normalize_rendered_volume_contract(expected)
 
 
 def test_parse_endpoint_cluster_preserves_cluster_prefix_and_idc_suffix():
@@ -341,6 +378,80 @@ def test_octagram_manifest_renderer_uses_workload_psm_for_log_host_paths():
         "opt-tiger-data-log": "/opt/tiger/tce/containers/inf.aibrix.platform",
         "opt-tiger-toutiao-log": "/opt/tiger/tce/containers/inf.aibrix.platform",
         "var-log-tiger": "/opt/tiger/tce/containers/inf.aibrix.platform",
+    }
+
+
+def test_octagram_manifest_renderer_keeps_lifecycle_hostpaths():
+    rendered = _render(spec=_spec())
+    pod_base = rendered["spec"]["podBase"]
+    container = pod_base["containers"][0]
+    volume_mount_names = {mount["name"] for mount in container["volumeMounts"]}
+    volume_names = {volume["name"] for volume in pod_base["volumes"]}
+
+    assert volume_mount_names == {
+        "bernard",
+        "bernard-tce-tools",
+        "opt-tiger-data-log",
+        "opt-tiger-toutiao-log",
+        "run",
+        "var-log-tiger",
+        "yarn-deploy",
+    }
+    assert volume_names == {
+        "bernard",
+        "bernard-tce-tools",
+        "opt-tiger-data-log",
+        "opt-tiger-toutiao-log",
+        "run",
+        "var-log-tiger",
+        "yarn-deploy",
+    }
+
+
+def test_octagram_manifest_renderer_preserves_container_lifecycle_contract():
+    container = _render(spec=_spec())["spec"]["podBase"]["containers"][0]
+
+    assert "startupProbe" not in container
+    assert container["livenessProbe"] == {
+        "exec": {
+            "command": [
+                "bash",
+                "-c",
+                "/opt/tiger/bernard/bernard_tools/bin/liveness_check.sh",
+            ]
+        },
+        "initialDelaySeconds": 180,
+        "failureThreshold": 5,
+        "periodSeconds": 60,
+        "successThreshold": 1,
+        "timeoutSeconds": 30,
+    }
+    assert container["readinessProbe"] == {
+        "exec": {
+            "command": [
+                "bash",
+                "-c",
+                "/opt/tiger/tce/tce_tools/bin/readiness_check.sh",
+            ]
+        },
+        "failureThreshold": 2,
+        "periodSeconds": 20,
+        "successThreshold": 1,
+        "timeoutSeconds": 30,
+    }
+    assert container["lifecycle"] == {
+        "preStop": {
+            "exec": {
+                "command": [
+                    "bash",
+                    "-c",
+                    (
+                        "/opt/tiger/tce/tce_tools/bin/pre_stop; "
+                        "/home/tiger/.op/docker_pre_stop.sh;"
+                    ),
+                ]
+            }
+        }
     }
 
 
@@ -492,6 +603,45 @@ def test_octagram_manifest_renderer_omits_empty_cpu_and_memory_fields():
     assert "memory" not in resources
     assert rules[0]["resourcePercentage"] == {"gpu": 100}
     assert rules[1]["resourcePercentage"] == {"gpu": 100}
+
+
+def test_octagram_manifest_renderer_uses_generic_cpu_fallback_for_legacy_request():
+    rendered = _render(
+        detail=_resource_detail(
+            accelerator_type="A100-SXM4-40GB",
+            cpu=None,
+            memory=None,
+            accelerator_count=8,
+        )
+    )
+
+    deployment_annotations = rendered["spec"]["deploymentMeta"]["annotations"]
+    pod_annotations = rendered["spec"]["podBase"]["annotations"]
+    resources = rendered["spec"]["podBase"]["containers"][0]["resources"]
+
+    assert (
+        deployment_annotations["deployment.tce.kubernetes.io/requestCpuUserDemand"]
+        == "128"
+    )
+    assert pod_annotations["pod.tce.kubernetes.io/requestCpuUserDemand"] == "128"
+    assert resources["cpu"] == {"request": "128", "limit": "128"}
+    assert resources["memory"] == {"request": "768Gi", "limit": "768Gi"}
+
+
+def test_octagram_manifest_renderer_keeps_explicit_cpu_request():
+    rendered = _render(
+        detail=_resource_detail(
+            accelerator_type="A100-SXM4-40GB",
+            accelerator_count=8,
+            cpu="126",
+            memory=None,
+        )
+    )
+
+    resources = rendered["spec"]["podBase"]["containers"][0]["resources"]
+
+    assert resources["cpu"] == {"request": "126", "limit": "126"}
+    assert resources["memory"] == {"request": "768Gi", "limit": "768Gi"}
 
 
 def test_octagram_manifest_renderer_adds_scheduled_feature_gate_conditionally():

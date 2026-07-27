@@ -16,6 +16,7 @@ import ast
 import asyncio
 import pkgutil
 from dataclasses import dataclass
+from http import HTTPStatus
 
 import httpx
 import pytest
@@ -33,6 +34,11 @@ from aibrix.batch.client import (
     RetryConfig,
 )
 from aibrix.batch.client.engine import _ConcurrencyAdmission
+from aibrix.batch.internal import consul_discovery as consul_discovery_module
+from aibrix.batch.internal.consul_discovery import (
+    ConsulDiscoveryService,
+    ConsulInferenceEndpoint,
+)
 
 
 class _FakeChannel:
@@ -433,6 +439,96 @@ async def test_retryable_error_reports_failed_channel_before_retry():
     assert source.reported == [("bad", InferenceErrorCode.TRANSPORT_ERROR)]
     assert bad.calls == ["r1"]
     assert good.calls == ["r1"]
+
+
+@pytest.mark.asyncio
+async def test_server_error_reports_channel_failure_before_retry():
+    bad = _ErrorChannel(
+        "bad",
+        InferenceError(
+            InferenceErrorCode.HTTP_ERROR,
+            "not implemented",
+            status_code=HTTPStatus.NOT_IMPLEMENTED,
+            retryable=False,
+        ),
+    )
+    good = _FakeChannel("good")
+
+    class _ReportingSource:
+        def __init__(self):
+            self.reported = []
+
+        async def channels(self):
+            return [bad, good]
+
+        async def capacity(self):
+            return CapacitySignal(count=2)
+
+        async def wait_capacity_change(self, previous):
+            raise AssertionError("unused")
+
+        async def report_channel_error(self, channel_id, error):
+            self.reported.append((channel_id, error.code))
+
+        async def aclose(self):
+            return None
+
+    source = _ReportingSource()
+    engine = DispatchEngine(source, max_retries=1)
+
+    result = await engine.send_one(InferenceRequest("/test", {}, ref="r1"))
+
+    assert result["by"] == "good"
+    assert source.reported == [("bad", InferenceErrorCode.HTTP_ERROR)]
+    assert bad.calls == ["r1"]
+    assert good.calls == ["r1"]
+
+
+def test_consul_lookup_falls_back_to_sd_when_sdk_lookup_fails(monkeypatch):
+    service = ConsulDiscoveryService.__new__(ConsulDiscoveryService)
+    fallback_endpoint = ConsulInferenceEndpoint(
+        host="127.0.0.1",
+        port=8080,
+        tags={"model_info": "vllm|model"},
+    )
+
+    class FailingClient:
+        def lookup_name(self, psm, timeout):
+            del psm, timeout
+            raise RuntimeError("lookup failed")
+
+    service._client = FailingClient()
+    fallback_calls = []
+
+    def fallback(psm, lookup_timeout_seconds):
+        fallback_calls.append((psm, lookup_timeout_seconds))
+        return [fallback_endpoint]
+
+    monkeypatch.setattr(service, "_lookup_sd_cli_endpoints", fallback)
+
+    assert service._lookup_endpoints("test.service", 1.0) == [fallback_endpoint]
+    assert fallback_calls == [("test.service", 1.0)]
+
+
+def test_consul_sd_lookup_uses_lookup_timeout(monkeypatch):
+    service = ConsulDiscoveryService.__new__(ConsulDiscoveryService)
+    run_kwargs = {}
+
+    class Result:
+        stdout = ""
+
+    monkeypatch.setattr(consul_discovery_module.shutil, "which", lambda name: name)
+
+    def run(command, **kwargs):
+        del command
+        run_kwargs.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr(consul_discovery_module.subprocess, "run", run)
+
+    service._lookup_sd_cli_endpoints("test.service", 0.25)
+
+    assert run_kwargs["timeout"] == 0.25
 
 
 @pytest.mark.asyncio

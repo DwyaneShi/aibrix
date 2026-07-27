@@ -193,6 +193,22 @@ def _handle() -> OctagramHandle:
     )
 
 
+@pytest.mark.asyncio
+async def test_connect_uses_handle_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handle = _handle()
+    handle.base_url = "http://engine.example.test:8000"
+    handle.request_timeout_seconds = 123.0
+    runtime = _runtime(FakeHttpxClientWrapper({}), monkeypatch)
+
+    endpoint = await runtime._connect(handle)
+
+    assert endpoint.source is not None
+    channels = await endpoint.source.channels()
+    assert channels[0]._timeout == 123.0
+
+
 def _runtime(
     wrapper: FakeHttpxClientWrapper,
     monkeypatch: pytest.MonkeyPatch,
@@ -245,6 +261,116 @@ def _make_job(job_id: str = "job-123456789abc") -> BatchJob:
         spec=spec,
         status=status,
     )
+
+
+def test_resolve_psm_appends_idc_for_worker_psm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(
+        FakeHttpxClientWrapper({}),
+        monkeypatch,
+        renderer=FakeOctagramRenderer(psm="inf.aibrix.inference_workers"),
+    )
+    workload = {
+        "metadata": {
+            "labels": {
+                "psm": "inf.aibrix.inference_workers",
+            }
+        }
+    }
+
+    assert runtime._resolve_psm(workload) == "inf.aibrix.inference_workers.service.hl"
+
+
+def test_resolve_psm_does_not_double_append_idc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(
+        FakeHttpxClientWrapper({}),
+        monkeypatch,
+        renderer=FakeOctagramRenderer(psm="inf.aibrix.inference_workers.service.my2"),
+    )
+    workload = {
+        "metadata": {
+            "labels": {
+                "psm": "inf.aibrix.inference_workers.service.my2",
+            }
+        }
+    }
+
+    assert runtime._resolve_psm(workload) == "inf.aibrix.inference_workers.service.my2"
+
+
+def test_resolve_psm_normalizes_aliyun_va_idc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    renderer = FakeOctagramRenderer(psm="inf.aibrix.inference_workers")
+    renderer.idc_name = "aliyun_va"
+    runtime = _runtime(
+        FakeHttpxClientWrapper({}),
+        monkeypatch,
+        renderer=renderer,
+    )
+    workload = {
+        "metadata": {
+            "labels": {
+                "psm": "inf.aibrix.inference_workers",
+            }
+        }
+    }
+
+    assert (
+        runtime._resolve_psm(workload) == "inf.aibrix.inference_workers.service.maliva"
+    )
+
+
+def test_resolve_psm_normalizes_existing_aliyun_va_service_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(
+        FakeHttpxClientWrapper({}),
+        monkeypatch,
+        renderer=FakeOctagramRenderer(
+            psm="inf.aibrix.inference_workers.service.aliyun_va"
+        ),
+    )
+    workload = {
+        "metadata": {
+            "labels": {
+                "psm": "inf.aibrix.inference_workers.service.aliyun_va",
+            }
+        }
+    }
+
+    assert (
+        runtime._resolve_psm(workload) == "inf.aibrix.inference_workers.service.maliva"
+    )
+
+
+@pytest.mark.parametrize(
+    ("psm", "idc_name", "expected"),
+    [
+        (
+            "inf.aibrix.inference_workers",
+            "",
+            "inf.aibrix.inference_workers",
+        ),
+        (
+            "inf.aibrix.inference_workers.service",
+            "HL",
+            "inf.aibrix.inference_workers.service.hl",
+        ),
+    ],
+)
+def test_normalize_psm_service_idc_handles_incomplete_service_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    psm: str,
+    idc_name: str,
+    expected: str,
+) -> None:
+    runtime = _runtime(FakeHttpxClientWrapper({}), monkeypatch)
+
+    assert runtime._normalize_psm_service_idc(psm, idc_name) == expected
 
 
 _PROVISIONED_CLUSTER = "cluster-a-HL"
@@ -574,6 +700,51 @@ async def test_wait_for_workload_provision_retries_404_until_workload_exists(
 
 
 @pytest.mark.asyncio
+async def test_wait_for_workload_caps_minimum_by_requested_replicas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_replicas = 1
+    configured_minimum = 2
+    base_url = (
+        "https://octagram-gateway.example.test/api/v1/clusters/cluster-a/"
+        "namespaces/default/deploymentworkloads/batch-job-abcd1234"
+    )
+    wrapper = FakeHttpxClientWrapper(
+        {
+            "GET": [
+                _response(
+                    "GET",
+                    base_url,
+                    200,
+                    payload={
+                        "data": {
+                            "status": {
+                                "phase": "synced",
+                                "replicasStatuses": [{"available": requested_replicas}],
+                            }
+                        }
+                    },
+                )
+            ]
+        }
+    )
+    runtime = _runtime(wrapper, monkeypatch)
+    monkeypatch.setattr(
+        "aibrix.batch.internal.octagram_runtime._MIN_READY_REPLICAS",
+        configured_minimum,
+    )
+
+    await runtime._wait_for_workload(
+        cluster="cluster-a",
+        namespace="default",
+        workload_name="batch-job-abcd1234",
+        replicas=requested_replicas,
+    )
+
+    assert wrapper.async_client.calls == [("GET", base_url)]
+
+
+@pytest.mark.asyncio
 async def test_wait_for_workload_provision_404_respects_grace_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -768,6 +939,7 @@ async def test_octagram_runtime_reconnect_accepts_current_payload_keys(
 ) -> None:
     job = _make_job()
     runtime = _runtime(FakeHttpxClientWrapper({"POST": []}), monkeypatch)
+    monkeypatch.setattr(runtime, "_resolve_request_timeout_seconds", lambda _: 45.0)
 
     handle = await runtime._load_handle(
         job,
@@ -793,7 +965,39 @@ async def test_octagram_runtime_reconnect_accepts_current_payload_keys(
     assert handle.workload_name == "batch-job-1234"
     assert handle.model_name == "batch-job-1234"
     assert handle.psm == "fake-psm.service.hl"
+    assert handle.request_timeout_seconds == 45.0
     assert runtime._active_handle == handle
+
+
+@pytest.mark.asyncio
+async def test_octagram_runtime_reconnect_ignores_legacy_payload_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _make_job()
+    runtime = _runtime(FakeHttpxClientWrapper({"POST": []}), monkeypatch)
+    monkeypatch.setattr(runtime, "_resolve_request_timeout_seconds", lambda _: 45.0)
+
+    handle = await runtime._load_handle(
+        job,
+        job.job_id,
+        JobRuntimeRef(
+            driverType="tce",
+            ownerRef=f"{_PROVISIONED_CLUSTER}:default:batch-job-1234",
+            reconnectPayload={
+                "cluster": _PROVISIONED_CLUSTER,
+                "namespace": "default",
+                "workloadName": "batch-job-1234",
+                "modelName": "batch-job-1234",
+                "psm": "fake-psm.service.hl",
+                "baseUrl": None,
+                "replicas": 1,
+                "requestTimeoutSeconds": 123.0,
+            },
+        ),
+    )
+
+    assert handle is not None
+    assert handle.request_timeout_seconds == 45.0
 
 
 @pytest.mark.asyncio

@@ -49,6 +49,9 @@ from aibrix.logger import init_logger
 
 logger = init_logger(__name__)
 
+_HTTP_SERVER_ERROR_MIN_STATUS = 500
+_HTTP_SERVER_ERROR_MAX_STATUS = 599
+
 # Called once per request with (request, response, error). Exactly one of
 # response / error is non-None. May be sync or async.
 OnResult = Callable[
@@ -504,6 +507,14 @@ async def _maybe_await(value: Any) -> Any:
 
 
 def _should_retry(error: InferenceError) -> bool:
+    if (
+        error.code == InferenceErrorCode.HTTP_ERROR
+        and error.status_code is not None
+        and _HTTP_SERVER_ERROR_MIN_STATUS
+        <= error.status_code
+        <= _HTTP_SERVER_ERROR_MAX_STATUS
+    ):
+        return True
     # Preserve previous behavior for errors created before retryable was added:
     # client-layer transport failures from tests/custom channels remain retryable.
     return True if error.retryable is None else error.retryable
