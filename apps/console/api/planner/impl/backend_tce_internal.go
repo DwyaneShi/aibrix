@@ -34,6 +34,10 @@ import (
 	rmtypes "github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
 )
 
+var tceMatchingAcceleratorTypeAliases = map[string]string{
+	"NVIDIA-A100-SXM4-80GB": "A100-SXM-80GB",
+}
+
 func init() {
 	RegisterBackend(rmtypes.ResourceProvisionTypeTCE, func(provisioner.Provisioner) plannerBackend {
 		return &tcePlannerBackend{}
@@ -56,6 +60,9 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 	gpuType, gpusPerReplica, err := decodeAcceleratorFromTemplate(req.ModelTemplate)
 	if err != nil {
 		return spec, err
+	}
+	if canonicalType, ok := tceMatchingAcceleratorTypeAliases[gpuType]; ok {
+		gpuType = canonicalType
 	}
 
 	// Default and minimum time window is 1 hour

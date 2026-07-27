@@ -18,6 +18,7 @@ package impl
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -76,6 +77,52 @@ func TestDefaultPlannerBackendScheduleUsesRequestedReplicas(t *testing.T) {
 	got := (*spec.Groups)[0].Replicas
 	if got == nil || *got != 4 {
 		t.Fatalf("replicas = %v, want 4", got)
+	}
+}
+
+func TestTCEPlannerBackendScheduleOnlyCanonicalizesNVIDIAPrefixedType(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "canonicalize NVIDIA-prefixed type",
+			input:    "NVIDIA-A100-SXM4-80GB",
+			expected: "A100-SXM-80GB",
+		},
+		{
+			name:     "preserve non-aliased type",
+			input:    "A100-SXM4-80GB",
+			expected: "A100-SXM4-80GB",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &tcePlannerBackend{}
+			spec, err := backend.Schedule(context.Background(), &plannerapi.EnqueueRequest{
+				ModelTemplate: &plannerapi.ModelTemplateRef{
+					Spec: []byte(fmt.Sprintf(
+						`{"accelerator": {"type": %q, "count": 8}}`,
+						tt.input,
+					)),
+				},
+			})
+			if err != nil {
+				t.Fatalf("Schedule: %v", err)
+			}
+			if spec.Groups == nil || len(*spec.Groups) != 1 {
+				t.Fatalf("groups = %#v, want one group", spec.Groups)
+			}
+			preference := (*spec.Groups)[0].AcceleratorPreference
+			if preference == nil || preference.PreferredTypes == nil {
+				t.Fatalf("accelerator preference = %#v, want preferred types", preference)
+			}
+			got := *preference.PreferredTypes
+			if !reflect.DeepEqual(got, []string{tt.expected}) {
+				t.Fatalf("preferred types = %v, want [%s]", got, tt.expected)
+			}
+		})
 	}
 }
 

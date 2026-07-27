@@ -91,7 +91,7 @@ _READINESS_PROBE = _ExecProbeConfig(
 # Octagram nodes are labeled with vendor-stripped names. Translate on dispatch;
 # unmapped values pass through unchanged.
 _OCTAGRAM_ACCELERATOR_TYPE_MAPPING = {
-    "NVIDIA-A100-SXM4-80GB": "A100-SXM4-80GB",
+    "NVIDIA-A100-SXM4-80GB": "A100-SXM-80GB",
 }
 
 _OCTAGRAM_XPU_RESOURCE_NAME = "bytedance.com/xpu"

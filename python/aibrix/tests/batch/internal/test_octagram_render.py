@@ -628,6 +628,25 @@ def test_octagram_manifest_renderer_uses_generic_cpu_fallback_for_legacy_request
     assert resources["memory"] == {"request": "768Gi", "limit": "768Gi"}
 
 
+def test_octagram_manifest_renderer_only_canonicalizes_nvidia_prefixed_a100():
+    for accelerator_type, expected_type in (
+        ("NVIDIA-A100-SXM4-80GB", "A100-SXM-80GB"),
+        ("A100-SXM4-80GB", "A100-SXM4-80GB"),
+    ):
+        rendered = _render(
+            detail=_resource_detail(accelerator_type=accelerator_type)
+        )
+
+        deployment_annotations = rendered["spec"]["deploymentMeta"]["annotations"]
+        node_selector = rendered["spec"]["podBase"]["nodeSelector"]
+
+        assert (
+            deployment_annotations["deployment.tce.kubernetes.io/gpu-type"]
+            == expected_type
+        )
+        assert node_selector["accelerator"] == expected_type
+
+
 def test_octagram_manifest_renderer_keeps_explicit_cpu_request():
     rendered = _render(
         detail=_resource_detail(

@@ -84,6 +84,15 @@ interface GpuSku {
   vramGb: number;
   interconnect: 'nvlink' | 'pcie' | 'ib' | 'mlulink' | '';
 }
+
+const LEGACY_GPU_TYPE_ALIASES: Readonly<Record<string, string>> = {
+  'NVIDIA-A100-SXM4-80GB': 'A100-SXM-80GB',
+};
+
+function canonicalGpuType(type: string | undefined): string | undefined {
+  return type ? (LEGACY_GPU_TYPE_ALIASES[type] ?? type) : type;
+}
+
 // Curated GPU catalog. current GPU formats is hardcoded in the list, in the future we can get this from config files
 const GPU_CATALOG: GpuSku[] = [
   { type: 'Tesla-P4', label: 'NVIDIA Tesla P4 (8 GB, PCIe)', vramGb: 8, interconnect: 'pcie' },
@@ -95,8 +104,7 @@ const GPU_CATALOG: GpuSku[] = [
   { type: 'A100-PCIE-40GB', label: 'NVIDIA A100 PCIe (40 GB, PCIe)', vramGb: 40, interconnect: 'pcie' },
   { type: 'A100-PCIE-80GB', label: 'NVIDIA A100 PCIe (80 GB, PCIe)', vramGb: 80, interconnect: 'pcie' },
   { type: 'A100-SXM4-40GB', label: 'NVIDIA A100 SXM4 (40 GB, NVLink)', vramGb: 40, interconnect: 'nvlink' },
-  { type: 'NVIDIA-A100-SXM4-80GB', label: 'NVIDIA A100 SXM4 (80 GB, NVLink)', vramGb: 80, interconnect: 'nvlink' },
-  { type: 'A100-SXM-80GB', label: 'NVIDIA A100 SXM (80 GB, NVLink)', vramGb: 80, interconnect: 'nvlink' },
+  { type: 'A100-SXM-80GB', label: 'NVIDIA A100 SXM4 (80 GB, NVLink)', vramGb: 80, interconnect: 'nvlink' },
   { type: 'NVIDIA-A800-SXM4-80GB', label: 'NVIDIA A800 SXM4 (80 GB, NVLink)', vramGb: 80, interconnect: 'nvlink' },
   { type: 'H100-SXM-80GB', label: 'NVIDIA H100 SXM (80 GB, NVLink)', vramGb: 80, interconnect: 'nvlink' },
   { type: 'NVIDIA-B200', label: 'NVIDIA B200 (180 GB, NVLink)', vramGb: 180, interconnect: 'nvlink' },
@@ -205,8 +213,13 @@ export function CreateModelDeploymentTemplate({
         const s = t.spec ?? emptySpec();
         const t0 = (s.engine?.type ?? '').trim().toLowerCase();
         const normalizedType = ENGINE_TYPES.includes(t0) ? t0 : 'vllm';
-        s.engine = { ...(s.engine ?? {}), type: normalizedType };
-        setSpec(s);
+        setSpec({
+          ...s,
+          engine: { ...(s.engine ?? {}), type: normalizedType },
+          accelerator: s.accelerator
+            ? { ...s.accelerator, type: canonicalGpuType(s.accelerator.type) }
+            : s.accelerator,
+        });
       })
       .catch(err => setError(`Failed to load template: ${err}`));
   }, [sourceTemplateId, modelId, isClone]);
@@ -287,7 +300,12 @@ export function CreateModelDeploymentTemplate({
       return;
     }
 
-    const finalSpec: ModelDeploymentTemplateSpec = { ...spec };
+    const finalSpec: ModelDeploymentTemplateSpec = {
+      ...spec,
+      accelerator: spec.accelerator
+        ? { ...spec.accelerator, type: canonicalGpuType(spec.accelerator.type) }
+        : spec.accelerator,
+    };
 
     setSaving(true);
     try {
