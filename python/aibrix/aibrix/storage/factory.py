@@ -26,6 +26,24 @@ from aibrix.storage.types import StorageType
 # their optional dependencies (e.g. ``redis.asyncio``, ``boto3``, ``tos``).
 
 
+def _non_negative_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return default
+
+    value = int(raw_value)
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return value
+
+
+def _storage_config_from_env() -> StorageConfig:
+    defaults = StorageConfig()
+    return StorageConfig(
+        max_retries=_non_negative_int_env("STORAGE_MAX_RETRIES", defaults.max_retries),
+    )
+
+
 def create_storage(
     storage_type: Union[StorageType, str],
     config: Optional[StorageConfig] = None,
@@ -52,7 +70,7 @@ def create_storage(
             raise ValueError(f"Unsupported storage type: {storage_type}")
 
     if config is None:
-        config = StorageConfig()
+        config = _storage_config_from_env()
 
     if storage_type == StorageType.AUTO:
         return create_storage_from_env()

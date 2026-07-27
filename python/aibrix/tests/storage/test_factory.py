@@ -18,8 +18,10 @@ Storage factory tests.
 Tests the storage factory functionality for creating different storage types.
 """
 
+import asyncio
 import sys
 import tempfile
+import threading
 import types
 from pathlib import Path
 
@@ -32,6 +34,7 @@ from aibrix.storage import (
     StorageType,
     create_storage,
 )
+from aibrix.storage.base2 import BaseStorage2
 
 
 class TestStorageFactory:
@@ -86,6 +89,20 @@ class TestStorageFactory:
 
             assert isinstance(storage, LocalStorage)
             assert storage.get_list_ordering() == StorageListOrdering.CREATED_AT_DESC
+
+    def test_create_storage_uses_retry_config_from_env(self, monkeypatch):
+        monkeypatch.setenv("STORAGE_MAX_RETRIES", "7")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            storage = create_storage(StorageType.LOCAL, base_path=tmp_dir)
+
+        assert storage.config.max_retries == 7
+
+    def test_create_storage_rejects_negative_retry_config(self, monkeypatch):
+        monkeypatch.setenv("STORAGE_MAX_RETRIES", "-1")
+
+        with pytest.raises(ValueError, match="STORAGE_MAX_RETRIES must be >= 0"):
+            create_storage(StorageType.LOCAL)
 
     def test_create_s3_storage_missing_bucket(self):
         """Test that S3 storage creation fails without bucket name."""
@@ -222,6 +239,262 @@ class TestStorageFactory:
         assert calls["kwargs"]["ve_cred"] is calls["cred"]
         assert calls["kwargs"]["ve_region"] == "cn-beijing"
         assert calls["kwargs"]["ve_endpoint"] == "https://tos-cn-beijing.volces.com"
+
+    def test_bytetos_uses_shared_strict_multipart_aggregation(self, monkeypatch):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            config=StorageConfig(multipart_threshold=8),
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+        multipart_calls = []
+
+        async def multipart_upload(
+            key,
+            data,
+            content_type=None,
+            metadata=None,
+            byline=0,
+            bysize=0,
+            parts=1,
+        ):
+            multipart_calls.append(
+                {
+                    "key": key,
+                    "data": data,
+                    "content_type": content_type,
+                    "metadata": metadata,
+                    "byline": byline,
+                    "bysize": bysize,
+                    "parts": parts,
+                }
+            )
+
+        storage.multipart_upload = multipart_upload
+
+        assert asyncio.run(storage.put_object("key", b"12345678")) is True
+        assert isinstance(storage, BaseStorage2)
+        assert storage.config.strict_multipart_min_part_size is True
+        assert len(multipart_calls) == 1
+        assert multipart_calls[0]["bysize"] == 7
+
+    def test_tos_object_exists_retries_transient_head_error(self, monkeypatch):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            config=StorageConfig(max_retries=2),
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+
+        import aibrix.storage.bytetos as bytetos_mod
+
+        monkeypatch.setattr(bytetos_mod.time, "sleep", lambda _: None)
+        calls = []
+
+        class HeadObjectError(Exception):
+            status_code = "408"
+
+        def head_object(key):
+            calls.append(key)
+            if len(calls) == 1:
+                raise HeadObjectError("408::request timeout")
+            return object()
+
+        storage.client.head_object = head_object
+
+        assert asyncio.run(storage.object_exists(".multipart/upload/metadata")) is True
+        assert calls == [".multipart/upload/metadata", ".multipart/upload/metadata"]
+
+    @pytest.mark.parametrize(
+        ("attributes", "message", "expected"),
+        [
+            ({"status_code": "408"}, "", True),
+            ({"code": "4038"}, "", True),
+            ({"code": "408"}, "", False),
+            ({"status_code": "4038"}, "", False),
+            ({}, "request timed out", False),
+        ],
+    )
+    def test_tos_retry_codes_are_checked_separately(
+        self, monkeypatch, attributes, message, expected
+    ):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+        error = RuntimeError(message)
+        for name, value in attributes.items():
+            setattr(error, name, value)
+
+        assert storage._is_retryable_tos_error(error) is expected
+
+    def test_tos_object_exists_does_not_retry_status_in_object_name(self, monkeypatch):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            config=StorageConfig(max_retries=2),
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+        calls = []
+
+        class HeadObjectError(Exception):
+            pass
+
+        def head_object(key):
+            calls.append(key)
+            raise HeadObjectError(f"permission denied for {key}")
+
+        storage.client.head_object = head_object
+        object_key = "image_500_tos.jsonl"
+
+        with pytest.raises(ValueError, match="permission denied"):
+            asyncio.run(storage.object_exists(object_key))
+        assert calls == [object_key]
+
+    def test_tos_object_exists_preserves_not_found_semantics(self, monkeypatch):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            config=StorageConfig(max_retries=2),
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+
+        class HeadObjectError(Exception):
+            code = "404"
+
+        storage.client.head_object = lambda _: (_ for _ in ()).throw(
+            HeadObjectError("404::not found")
+        )
+
+        assert asyncio.run(storage.object_exists(".multipart/upload/metadata")) is False
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            ("text", b"text"),
+            (bytearray(b"bytearray"), b"bytearray"),
+            (memoryview(b"memoryview"), b"memoryview"),
+        ],
+    )
+    def test_tos_response_data_accepts_bytes_like_values(
+        self, monkeypatch, payload, expected
+    ):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+
+        response = types.SimpleNamespace(data=payload)
+
+        assert storage._response_data(response) == expected
+
+    def test_tos_response_data_encodes_text_from_reader(self, monkeypatch):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+
+        response = types.SimpleNamespace(
+            data=types.SimpleNamespace(read=lambda: "text")
+        )
+
+        assert storage._response_data(response) == b"text"
+
+    def test_tos_upload_part_reads_once_in_executor_across_retries(self, monkeypatch):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            config=StorageConfig(max_retries=1),
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+
+        import aibrix.storage.bytetos as bytetos_mod
+
+        monkeypatch.setattr(bytetos_mod.time, "sleep", lambda _: None)
+        caller_thread = threading.get_ident()
+        read_threads = []
+        upload_calls = []
+
+        class RetryableUploadError(Exception):
+            status_code = "408"
+
+        class Stream:
+            def read(self, size=-1):
+                del size
+                read_threads.append(threading.get_ident())
+                return b"payload"
+
+        def upload_part(key, upload_id, part_number, payload):
+            upload_calls.append(
+                (key, upload_id, part_number, payload, threading.get_ident())
+            )
+            if len(upload_calls) == 1:
+                raise RetryableUploadError("request timed out")
+            return types.SimpleNamespace(headers={"ETag": "part-etag"})
+
+        storage.client.upload_part = upload_part
+
+        etag = asyncio.run(storage._native_upload_part("key", "upload-id", 1, Stream()))
+
+        assert etag == "part-etag"
+        assert len(read_threads) == 1
+        assert read_threads[0] != caller_thread
+        assert [call[:4] for call in upload_calls] == [
+            ("key", "upload-id", 1, b"payload"),
+            ("key", "upload-id", 1, b"payload"),
+        ]
+        assert all(call[4] == read_threads[0] for call in upload_calls)
 
     def test_unsupported_storage_type(self):
         """Test error handling for unsupported storage types."""

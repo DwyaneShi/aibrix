@@ -92,6 +92,29 @@ class TestFilesAPI:
             assert metadata["etag"] is not None
             assert metadata["last_modified"] is not None
 
+    def test_upload_and_retrieve_content_matches_uploaded_bytes(self):
+        """Uploaded files must be persisted with the exact request body bytes."""
+        app = create_test_app()
+        payload = (
+            b'{"custom_id":"req-1","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"model","messages":[]}}\n'
+        )
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/files/",
+                files={"file": ("test.jsonl", BytesIO(payload), "application/jsonl")},
+                data={"purpose": "batch"},
+            )
+
+            assert response.status_code == 200
+            upload_data = response.json()
+            assert upload_data["bytes"] == len(payload)
+
+            content_response = client.get(f"/v1/files/{upload_data['id']}/content")
+            assert content_response.status_code == 200
+            assert content_response.content == payload
+
     def test_head_metadata(self):
         """Test HEAD endpoint for file metadata."""
         app = create_test_app()
@@ -257,17 +280,6 @@ class TestUploadErrors:
             )
             assert response.status_code == 422
 
-    @pytest.mark.xfail(
-        reason=(
-            "Reader.size_limiter only checks before reads, and a single "
-            "read-all (bytes_to_read=-1, bytes_read=0) trivially passes "
-            "(0 + 0 <= limit), so an oversize payload uploaded in one "
-            "shot bypasses the limit. Tracking as a separate fix in the "
-            "storage Reader; this case is kept to lock in the wire "
-            "contract once the limiter is corrected."
-        ),
-        strict=True,
-    )
     def test_upload_rejects_oversized_file(self, monkeypatch):
         monkeypatch.setattr(metadata_settings, "MAX_FILE_SIZE", 16)
         with TestClient(create_test_app()) as client:

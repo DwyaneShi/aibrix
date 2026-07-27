@@ -784,6 +784,48 @@ class TestReader:
 
         reader.close()
 
+    def test_reader_integer_size_limit_accepts_exact_boundary(self):
+        test_data = b"exact"
+        reader = Reader(BytesIO(test_data), size_limiter=len(test_data))
+
+        assert reader.read_all() == test_data
+        assert reader.read(1) == b""
+        assert reader.bytes_read() == len(test_data)
+
+    def test_reader_integer_size_limit_bounds_unknown_length_read(self):
+        bytes_io = BytesIO(b"x" * 100)
+        reader = Reader(bytes_io, size_limiter=10)
+
+        with pytest.raises(
+            SizeExceededError, match="Read operation rejected by size limiter"
+        ):
+            reader.read_all()
+
+        assert bytes_io.tell() == 11
+        assert reader.bytes_read() == 0
+
+        chunked_bytes_io = BytesIO(b"x" * 100)
+        chunked_reader = Reader(chunked_bytes_io, size_limiter=10)
+        with pytest.raises(SizeExceededError):
+            chunked_reader.read(100)
+        assert chunked_bytes_io.tell() == 11
+
+    def test_reader_integer_size_limit_rejects_known_size(self):
+        reader = Reader(BytesIO(b"x" * 11), size_limiter=10)
+
+        with pytest.raises(
+            SizeExceededError, match="Read operation rejected by size limiter"
+        ):
+            reader.get_size()
+
+    def test_reader_bytes_propagates_size_limit_error(self):
+        reader = Reader(BytesIO(b"x" * 11), size_limiter=10)
+
+        with pytest.raises(
+            SizeExceededError, match="Read operation rejected by size limiter"
+        ):
+            bytes(reader)
+
     @pytest.mark.asyncio
     async def test_reader_size_limiter_none(self):
         """Test Reader with no size limiter (default behavior)."""

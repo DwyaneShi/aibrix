@@ -101,16 +101,12 @@ class Reader:
         self._bytes_read = 0
 
         # Size limiter for controlling read operations
+        self._max_bytes: Optional[int] = None
         self._size_limiter: Optional[Callable[[int, int], bool]] = None
         if isinstance(size_limiter, int):
-            # Default implementation:
-            # if bytes_to_read == -1: # read all
-            #   bytes_read <= size_limiter
-            # else:
-            #   bytes_read + bytes_to_read <= size_limiter
-            self._size_limiter = lambda bytes_read, bytes_to_read: (
-                bytes_read + (bytes_to_read if bytes_read > 0 else 0) <= size_limiter
-            )
+            if size_limiter < 0:
+                raise ValueError("size_limiter must be non-negative")
+            self._max_bytes = size_limiter
         else:
             self._size_limiter = size_limiter
 
@@ -157,6 +153,24 @@ class Reader:
                 raise
             # If the size limiter itself raises an exception, wrap it
             raise SizeExceededError(f"Size limiter check failed: {e}") from e
+
+    def _check_actual_size_limit(self, bytes_read: int) -> None:
+        if (
+            self._max_bytes is not None
+            and self._bytes_read + bytes_read > self._max_bytes
+        ):
+            raise SizeExceededError(
+                "Read operation rejected by size limiter: "
+                f"{self._bytes_read + bytes_read} bytes exceeds "
+                f"the {self._max_bytes}-byte limit"
+            )
+
+    def _check_total_size_limit(self, total_size: int) -> None:
+        if self._max_bytes is not None and total_size > self._max_bytes:
+            raise SizeExceededError(
+                "Read operation rejected by size limiter: "
+                f"{total_size} bytes exceeds the {self._max_bytes}-byte limit"
+            )
 
     def _read_text_with_byte_limit(self, size: int) -> bytes:
         """Read from TextIO object with correct byte size limiting.
@@ -267,27 +281,37 @@ class Reader:
         # Check size limit before reading
         self._check_size_limit(size)
 
+        read_size = size
+        if self._max_bytes is not None:
+            # One byte beyond the remaining allowance is sufficient to prove
+            # that an unknown-length stream is oversized.
+            size_probe = max(self._max_bytes - self._bytes_read + 1, 1)
+            if size < 0 or size > size_probe:
+                read_size = size_probe
+
         # Special handling for TextIO objects to ensure correct byte sizes
         if self._is_text_file:
-            data = self._read_text_with_byte_limit(size)
+            data = self._read_text_with_byte_limit(read_size)
         else:
             # Read data from the underlying object (binary mode)
             if not self._has_async_read:
                 # Regular sync read
-                data = self._file_obj.read(size)
+                data = self._file_obj.read(read_size)
             elif self._is_upload_file_like:
                 # Special handling for FastAPI UploadFile - use the underlying .file attribute
                 # which is typically a synchronous file-like object
-                data = self._file_obj.file.read(size)
+                data = self._file_obj.file.read(read_size)
             else:
                 storage_loop_thread = get_storage_loop_thread()
                 assert storage_loop_thread is not None
                 data = storage_loop_thread.submit_coroutine(
-                    self._file_obj.read(size)
+                    self._file_obj.read(read_size)
                 ).result()
 
             # Ensure we always return bytes for binary data
             data = data if isinstance(data, bytes) else bytes(data)
+
+        self._check_actual_size_limit(len(data))
 
         # Track bytes read for size calculation
         self._bytes_read += len(data)
@@ -437,7 +461,9 @@ class Reader:
 
         # Try to get size from object's size attribute (common in UploadFile-like objects)
         if hasattr(self._file_obj, "size") and self._file_obj.size is not None:
-            return self._file_obj.size
+            size = self._file_obj.size
+            self._check_total_size_limit(size)
+            return size
 
         # For text files, seek positions are in characters, not bytes
         # We need to read the content to get the actual byte size
@@ -459,6 +485,7 @@ class Reader:
         current_pos = self.tell()
         try:
             end_pos = self.seek(0, 2)  # Seek to end
+            self._check_total_size_limit(end_pos)
             return end_pos
         finally:
             self.seek(current_pos)  # Restore original position
@@ -645,6 +672,8 @@ class Reader:
             # Read all content
             return self.read_all()
 
+        except SizeExceededError:
+            raise
         except Exception:
             # If anything fails, return empty bytes
             return b""

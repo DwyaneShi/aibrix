@@ -15,6 +15,7 @@
 import time
 import uuid
 from enum import Enum
+from http import HTTPStatus
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
@@ -155,13 +156,11 @@ async def create_file(
             )
             raise HTTPException(status_code=400, detail=error_response)
 
-        # Wraps in reader
         reader = Reader(file, size_limiter=maxFileSize)
 
         # Generate unique file ID
         file_id = str(uuid.uuid4())
 
-        # Store file content (using bytes since we already read the content)
         storage: BaseStorage = request.app.state.storage
 
         # Generate metadata
@@ -180,7 +179,10 @@ async def create_file(
                 f"Maximum content size limit exceeded. The content size surpasses the allowed limit of {maxFileSize} bytes.",
                 code="content_size_limit_exceeded",
             )
-            raise HTTPException(status_code=413, detail=error_response)
+            raise HTTPException(
+                status_code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                detail=error_response,
+            )
 
         logger.info(
             "File uploaded successfully",
@@ -204,7 +206,10 @@ async def create_file(
     except Exception as e:
         logger.error("Unexpected error uploading file", error=str(e))  # type: ignore[call-arg]
         error_response = _create_error_response("Internal server error")
-        raise  # HTTPException(status_code=500, detail=error_response)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=error_response,
+        ) from e
 
 
 @router.get("", include_in_schema=True)

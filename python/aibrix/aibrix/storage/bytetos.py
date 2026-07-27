@@ -16,10 +16,11 @@ import asyncio
 import json
 import mimetypes
 import os
+import time
 from dataclasses import replace
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import Any, BinaryIO, Optional, TextIO, Union
+from typing import Any, AsyncIterator, BinaryIO, Optional, TextIO, Union
 from urllib.parse import unquote, urlparse
 
 import bytedtos
@@ -27,10 +28,20 @@ from bytedtos import StaticCredentials
 from bytedtos.errors import TosException
 from tos.exceptions import TosClientError, TosServerError
 
+from aibrix.logger import init_logger
 from aibrix.storage.base import PutObjectOptions, StorageConfig, StorageType
 from aibrix.storage.base2 import BaseStorage2
 from aibrix.storage.reader import Reader
 from aibrix.storage.utils import ObjectMetadata
+
+logger = init_logger(__name__)
+
+_RETRYABLE_HTTP_STATUS_CODES = {"408", "429", "500", "502", "503", "504"}
+_RETRYABLE_TOS_ERROR_CODES = {"4038"}
+_TOS_RETRY_BASE_DELAY_SECONDS = 0.2
+_TOS_RETRY_MAX_DELAY_SECONDS = 2.0
+_MULTIPART_THRESHOLD_OFFSET_BYTES = 1
+_MIN_STAGED_CHUNK_SIZE_BYTES = 1
 
 
 class TOSStorage(BaseStorage2):
@@ -159,22 +170,84 @@ class TOSStorage(BaseStorage2):
         message = str(error)
         return "404" in message or "NoSuchKey" in message or "Not Found" in message
 
+    def _is_retryable_tos_error(self, error: Exception) -> bool:
+        if self._is_not_found_error(error):
+            return False
+
+        http_status_code = getattr(error, "status_code", None)
+        if str(http_status_code) in _RETRYABLE_HTTP_STATUS_CODES:
+            return True
+
+        tos_error_code = getattr(error, "code", None)
+        return str(tos_error_code) in _RETRYABLE_TOS_ERROR_CODES
+
+    def _call_with_tos_retries(
+        self, description: str, call: Any, *, wrap_error: bool = True
+    ) -> Any:
+        max_retries = max(int(self.config.max_retries), 0)
+        max_attempts = max_retries + 1
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return call()
+            except (TosException, TosClientError, TosServerError) as e:
+                if attempt >= max_attempts or not self._is_retryable_tos_error(e):
+                    if not wrap_error:
+                        raise
+                    raise ValueError(f"Failed to {description}: {e}") from e
+
+                delay_seconds = min(
+                    _TOS_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)),
+                    _TOS_RETRY_MAX_DELAY_SECONDS,
+                )
+                logger.warning(
+                    "Retrying TOS operation after transient error",
+                    operation=description,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    delay_seconds=delay_seconds,
+                    error=str(e),
+                )  # type: ignore[call-arg]
+                time.sleep(delay_seconds)
+
+        raise RuntimeError(f"Failed to {description}: retry loop exited unexpectedly")
+
     def _response_headers(self, response: Any) -> dict[str, str]:
         headers = getattr(response, "headers", None)
         if headers is None:
             return {}
         return dict(headers)
 
-    def _response_data(self, response: Any) -> bytes:
-        data = getattr(response, "data", None)
-        if data is not None:
+    @staticmethod
+    def _coerce_response_data(data: Any) -> Optional[bytes]:
+        if isinstance(data, bytes):
             return data
+        if isinstance(data, str):
+            return data.encode("utf-8")
+        if isinstance(data, (bytearray, memoryview)):
+            return bytes(data)
+        return None
+
+    def _response_data(self, response: Any) -> bytes:
+        for attr in ("data", "content", "body"):
+            data = getattr(response, attr, None)
+            if data is None:
+                continue
+            if hasattr(data, "read"):
+                data = data.read()
+            response_data = self._coerce_response_data(data)
+            if response_data is not None:
+                return response_data
         raw = getattr(response, "raw", None)
         if raw is not None and hasattr(raw, "read"):
-            return raw.read()
+            response_data = self._coerce_response_data(raw.read())
+            if response_data is not None:
+                return response_data
         reader = getattr(response, "read", None)
         if callable(reader):
-            return reader()
+            response_data = self._coerce_response_data(reader())
+            if response_data is not None:
+                return response_data
         return b""
 
     def _response_payload(self, response: Any) -> dict[str, Any]:
@@ -206,11 +279,15 @@ class TOSStorage(BaseStorage2):
         return {}
 
     def _extract_content_length(self, response: Any) -> int:
-        size = getattr(response, "size", None)
-        if size is not None:
-            return int(size)
+        for attr in ("content_length", "contentLength", "size"):
+            size = getattr(response, attr, None)
+            if size is not None:
+                return int(size)
         headers = self._response_headers(response)
-        return int(headers.get("Content-Length") or headers.get("content-length") or 0)
+        normalized_headers = {
+            key.lower().replace("_", "-"): value for key, value in headers.items()
+        }
+        return int(normalized_headers.get("content-length") or 0)
 
     def _extract_content_type(self, response: Any, key: str) -> str:
         headers = self._response_headers(response)
@@ -383,10 +460,10 @@ class TOSStorage(BaseStorage2):
         )
 
         def _put_object() -> None:
-            try:
-                self.client.put_object(key, payload, headers=headers)
-            except (TosException, TosClientError, TosServerError) as e:
-                raise ValueError(f"Failed to put object {key}: {e}")
+            self._call_with_tos_retries(
+                f"put object {key}",
+                lambda: self.client.put_object(key, payload, headers=headers),
+            )
 
         await asyncio.get_event_loop().run_in_executor(None, _put_object)
 
@@ -517,12 +594,21 @@ class TOSStorage(BaseStorage2):
                     not key.startswith(".multipart/")
                     and size >= self.config.multipart_threshold
                 ):
+                    # Stage sub-threshold chunks first, then let BaseStorage2
+                    # aggregate them into native TOS parts. Direct native
+                    # multipart from the upload request has produced zero-byte
+                    # completed objects behind the PSM TOS gateway.
+                    staged_chunk_size = max(
+                        self.config.multipart_threshold
+                        - _MULTIPART_THRESHOLD_OFFSET_BYTES,
+                        _MIN_STAGED_CHUNK_SIZE_BYTES,
+                    )
                     await self.multipart_upload(
                         key,
                         reader,
                         content_type,
                         metadata,
-                        bysize=self.config.multipart_threshold,
+                        bysize=staged_chunk_size,
                     )
                     return True
             except (OSError, IOError, ValueError):
@@ -536,10 +622,10 @@ class TOSStorage(BaseStorage2):
             )
 
             def _put_object():
-                try:
-                    self.client.put_object(key, payload, headers=headers)
-                except (TosException, TosClientError, TosServerError) as e:
-                    raise ValueError(f"Failed to put object {key}: {e}")
+                self._call_with_tos_retries(
+                    f"put object {key}",
+                    lambda: self.client.put_object(key, payload, headers=headers),
+                )
 
             await asyncio.get_event_loop().run_in_executor(None, _put_object)
         finally:
@@ -579,6 +665,28 @@ class TOSStorage(BaseStorage2):
                 data = b""
 
         return data
+
+    async def readline_iter(self, key: str, start_line: int = 0) -> AsyncIterator[str]:
+        """Read lines, falling back to full-object reads when HEAD reports size 0."""
+        yielded = False
+        async for line in super().readline_iter(key, start_line):
+            yielded = True
+            yield line
+        if yielded:
+            return
+
+        try:
+            data = await self.get_object(key)
+        except FileNotFoundError:
+            return
+        if not data:
+            return
+
+        current_line = -1
+        for raw_line in data.splitlines(keepends=True):
+            current_line += 1
+            if current_line >= start_line:
+                yield raw_line.decode("utf-8", errors="replace")
 
     async def delete_object(self, key: str) -> None:
         """Delete an object from TOS."""
@@ -737,7 +845,11 @@ class TOSStorage(BaseStorage2):
 
         def _head_object():
             try:
-                self.client.head_object(key)
+                self._call_with_tos_retries(
+                    f"check object existence {key}",
+                    lambda: self.client.head_object(key),
+                    wrap_error=False,
+                )
                 return True
             except (TosException, TosClientError, TosServerError) as e:
                 if self._is_not_found_error(e):
@@ -751,7 +863,11 @@ class TOSStorage(BaseStorage2):
 
         def _head_object():
             try:
-                response = self.client.head_object(key)
+                response = self._call_with_tos_retries(
+                    f"get object size {key}",
+                    lambda: self.client.head_object(key),
+                    wrap_error=False,
+                )
                 if self._is_manifest_object(response):
                     manifest_metadata = self._extract_all_metadata(response)
                     return int(manifest_metadata.get("aibrix-content-length", "0"))
@@ -771,7 +887,11 @@ class TOSStorage(BaseStorage2):
 
         def _head_object():
             try:
-                response = self.client.head_object(key)
+                response = self._call_with_tos_retries(
+                    f"get object metadata {key}",
+                    lambda: self.client.head_object(key),
+                    wrap_error=False,
+                )
                 manifest_metadata = self._extract_all_metadata(response)
                 last_modified = self._extract_last_modified(response) or datetime.now()
                 user_metadata = self._extract_metadata(response)
@@ -899,22 +1019,23 @@ class TOSStorage(BaseStorage2):
         reader = self._wrap_data(data)
 
         def _upload_part():
-            try:
-                part_response = self.client.upload_part(
+            payload = reader.read_all()
+            part_response = self._call_with_tos_retries(
+                f"upload part {part_number} for {key}",
+                lambda: self.client.upload_part(
                     key,
                     upload_id,
                     part_number,
-                    reader.read_all(),
-                )
-                etag = self._extract_etag(part_response)
-                if etag:
-                    return etag
-                part_token = getattr(part_response, "part_number", "")
-                if ":" in part_token:
-                    return part_token.split(":", 1)[1]
-                return str(part_token or part_number)
-            except (TosException, TosClientError, TosServerError) as e:
-                raise ValueError(f"Failed to upload part {part_number} for {key}: {e}")
+                    payload,
+                ),
+            )
+            etag = self._extract_etag(part_response)
+            if etag:
+                return etag
+            part_token = getattr(part_response, "part_number", "")
+            if ":" in part_token:
+                return part_token.split(":", 1)[1]
+            return str(part_token or part_number)
 
         try:
             return await asyncio.get_event_loop().run_in_executor(None, _upload_part)
