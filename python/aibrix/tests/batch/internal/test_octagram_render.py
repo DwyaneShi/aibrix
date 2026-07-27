@@ -36,9 +36,10 @@ from aibrix.batch.job_entity import (
 
 _TESTDATA_DIR = Path(__file__).resolve().parents[1] / "testdata"
 _FIXED_NOW = datetime(2026, 5, 22, 18, 0, tzinfo=timezone.utc)
+_BERNARD_HOST_PATH = "/opt/tiger/bernard"
+_BERNARD_TOOLS_PATH = f"{_BERNARD_HOST_PATH}/bernard_tools"
 _RENDERED_VOLUME_MOUNT_NAMES = (
     "bernard",
-    "bernard-tce-tools",
     "opt-tiger-data-log",
     "opt-tiger-toutiao-log",
     "run",
@@ -47,7 +48,6 @@ _RENDERED_VOLUME_MOUNT_NAMES = (
 )
 _RENDERED_VOLUME_NAMES = (
     "bernard",
-    "bernard-tce-tools",
     "run",
     "yarn-deploy",
     "opt-tiger-data-log",
@@ -220,7 +220,7 @@ def _filter_named_items(items: list[dict], names: tuple[str, ...]) -> list[dict]
     return [item_by_name[name] for name in names]
 
 
-def _normalize_rendered_volume_contract(snapshot: dict) -> dict:
+def _normalize_rendered_runtime_contract(snapshot: dict) -> dict:
     expected = deepcopy(snapshot)
     pod_base = expected["spec"]["podBase"]
     container = pod_base["containers"][0]
@@ -230,17 +230,23 @@ def _normalize_rendered_volume_contract(snapshot: dict) -> dict:
     pod_base["volumes"] = _filter_named_items(
         pod_base["volumes"], _RENDERED_VOLUME_NAMES
     )
+    container["readinessProbe"]["exec"]["command"][
+        -1
+    ] = f"{_BERNARD_TOOLS_PATH}/bin/readiness_check.sh"
+    container["lifecycle"]["preStop"]["exec"]["command"][
+        -1
+    ] = f"{_BERNARD_TOOLS_PATH}/bin/pre_stop; /home/tiger/.op/docker_pre_stop.sh;"
     return expected
 
 
 def _normalized_request_snapshot_yaml():
     expected = _load_testdata_yaml("deploymentworkload_example_request.yaml")
-    return _normalize_rendered_volume_contract(expected)
+    return _normalize_rendered_runtime_contract(expected)
 
 
 def _normalized_xpu_request_snapshot_yaml():
     expected = _load_testdata_yaml("deploymentworkload_example_request_xpu.yaml")
-    return _normalize_rendered_volume_contract(expected)
+    return _normalize_rendered_runtime_contract(expected)
 
 
 def test_parse_endpoint_cluster_preserves_cluster_prefix_and_idc_suffix():
@@ -381,16 +387,20 @@ def test_octagram_manifest_renderer_uses_workload_psm_for_log_host_paths():
     }
 
 
-def test_octagram_manifest_renderer_keeps_lifecycle_hostpaths():
+def test_octagram_manifest_renderer_uses_kubeflow_compatible_hostpaths():
     rendered = _render(spec=_spec())
     pod_base = rendered["spec"]["podBase"]
     container = pod_base["containers"][0]
     volume_mount_names = {mount["name"] for mount in container["volumeMounts"]}
     volume_names = {volume["name"] for volume in pod_base["volumes"]}
+    host_paths = {
+        volume["name"]: volume["hostPath"]["path"]
+        for volume in pod_base["volumes"]
+        if "hostPath" in volume
+    }
 
     assert volume_mount_names == {
         "bernard",
-        "bernard-tce-tools",
         "opt-tiger-data-log",
         "opt-tiger-toutiao-log",
         "run",
@@ -399,13 +409,20 @@ def test_octagram_manifest_renderer_keeps_lifecycle_hostpaths():
     }
     assert volume_names == {
         "bernard",
-        "bernard-tce-tools",
         "opt-tiger-data-log",
         "opt-tiger-toutiao-log",
         "run",
         "var-log-tiger",
         "yarn-deploy",
     }
+    assert host_paths == {
+        "bernard": _BERNARD_HOST_PATH,
+        "yarn-deploy": "/opt/tiger/yarn_deploy",
+        "opt-tiger-data-log": "/opt/tiger/tce/containers/inf.aibrix.platform",
+        "opt-tiger-toutiao-log": "/opt/tiger/tce/containers/inf.aibrix.platform",
+        "var-log-tiger": "/opt/tiger/tce/containers/inf.aibrix.platform",
+    }
+    assert _BERNARD_TOOLS_PATH not in host_paths.values()
 
 
 def test_octagram_manifest_renderer_preserves_container_lifecycle_contract():
@@ -417,7 +434,7 @@ def test_octagram_manifest_renderer_preserves_container_lifecycle_contract():
             "command": [
                 "bash",
                 "-c",
-                "/opt/tiger/bernard/bernard_tools/bin/liveness_check.sh",
+                f"{_BERNARD_TOOLS_PATH}/bin/liveness_check.sh",
             ]
         },
         "initialDelaySeconds": 180,
@@ -431,7 +448,7 @@ def test_octagram_manifest_renderer_preserves_container_lifecycle_contract():
             "command": [
                 "bash",
                 "-c",
-                "/opt/tiger/tce/tce_tools/bin/readiness_check.sh",
+                f"{_BERNARD_TOOLS_PATH}/bin/readiness_check.sh",
             ]
         },
         "failureThreshold": 2,
@@ -446,7 +463,7 @@ def test_octagram_manifest_renderer_preserves_container_lifecycle_contract():
                     "bash",
                     "-c",
                     (
-                        "/opt/tiger/tce/tce_tools/bin/pre_stop; "
+                        f"{_BERNARD_TOOLS_PATH}/bin/pre_stop; "
                         "/home/tiger/.op/docker_pre_stop.sh;"
                     ),
                 ]

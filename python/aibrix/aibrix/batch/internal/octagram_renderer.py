@@ -33,12 +33,13 @@ _FALLBACK_MEMORY_GIB_PER_GPU = 96
 # TCE filesystem and container lifecycle contract.
 _BERNARD_HOST_PATH = "/opt/tiger/bernard"
 _BERNARD_TOOLS_HOST_PATH = f"{_BERNARD_HOST_PATH}/bernard_tools"
-_TCE_TOOLS_MOUNT_PATH = "/opt/tiger/tce/tce_tools"
-_TCE_TOOLS_BIN_PATH = f"{_TCE_TOOLS_MOUNT_PATH}/bin"
 _PRE_STOP_COMMAND = (
     "bash",
     "-c",
-    (f"{_TCE_TOOLS_BIN_PATH}/pre_stop; /home/tiger/.op/docker_pre_stop.sh;"),
+    (
+        f"{_BERNARD_TOOLS_HOST_PATH}/bin/pre_stop; "
+        "/home/tiger/.op/docker_pre_stop.sh;"
+    ),
 )
 
 
@@ -80,7 +81,7 @@ _READINESS_PROBE = _ExecProbeConfig(
     command=(
         "bash",
         "-c",
-        f"{_TCE_TOOLS_BIN_PATH}/readiness_check.sh",
+        f"{_BERNARD_TOOLS_HOST_PATH}/bin/readiness_check.sh",
     ),
     failure_threshold=2,
     period_seconds=20,
@@ -127,11 +128,6 @@ _BASE_FEATURE_GATES = [
 _VOLUME_MOUNTS = [
     {"name": "bernard", "mountPath": _BERNARD_HOST_PATH, "readOnly": True},
     {
-        "name": "bernard-tce-tools",
-        "mountPath": _TCE_TOOLS_MOUNT_PATH,
-        "readOnly": True,
-    },
-    {
         "name": "opt-tiger-data-log",
         "mountPath": "/opt/tiger/data/log",
         "subPath": "$(MY_POD_NAME)/data/log",
@@ -154,10 +150,6 @@ _VOLUMES = [
     {
         "name": "bernard",
         "hostPath": {"path": _BERNARD_HOST_PATH, "type": ""},
-    },
-    {
-        "name": "bernard-tce-tools",
-        "hostPath": {"path": _BERNARD_TOOLS_HOST_PATH, "type": ""},
     },
     {"name": "run", "emptyDir": {"medium": "Memory", "sizeLimit": "64Mi"}},
     {"name": "yarn-deploy", "hostPath": {"path": "/opt/tiger/yarn_deploy", "type": ""}},
