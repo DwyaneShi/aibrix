@@ -36,6 +36,7 @@ import (
 
 var tceMatchingAcceleratorTypeAliases = map[string]string{
 	"NVIDIA-A100-SXM4-80GB": "A100-SXM-80GB",
+	"A100-SXM4-80GB":        "A100-SXM-80GB",
 }
 
 func init() {

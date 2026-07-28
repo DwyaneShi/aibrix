@@ -80,7 +80,7 @@ func TestDefaultPlannerBackendScheduleUsesRequestedReplicas(t *testing.T) {
 	}
 }
 
-func TestTCEPlannerBackendScheduleOnlyCanonicalizesNVIDIAPrefixedType(t *testing.T) {
+func TestTCEPlannerBackendScheduleCanonicalizesLegacyA100Types(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -92,9 +92,9 @@ func TestTCEPlannerBackendScheduleOnlyCanonicalizesNVIDIAPrefixedType(t *testing
 			expected: "A100-SXM-80GB",
 		},
 		{
-			name:     "preserve non-aliased type",
+			name:     "canonicalize vendor-stripped legacy type",
 			input:    "A100-SXM4-80GB",
-			expected: "A100-SXM4-80GB",
+			expected: "A100-SXM-80GB",
 		},
 	}
 	for _, tt := range tests {
