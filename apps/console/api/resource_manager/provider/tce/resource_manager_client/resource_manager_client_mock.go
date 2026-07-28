@@ -157,6 +157,21 @@ func (mr *MockClientMockRecorder) GetStatistics(ctx, query interface{}) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStatistics", reflect.TypeOf((*MockClient)(nil).GetStatistics), ctx, query)
 }
 
+// GetMatchTimeline mocks base method.
+func (m *MockClient) GetMatchTimeline(ctx context.Context, matchID string) ([]scheduled_plan_types.MatchTimelineEntry, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMatchTimeline", ctx, matchID)
+	ret0, _ := ret[0].([]scheduled_plan_types.MatchTimelineEntry)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetMatchTimeline indicates an expected call of GetMatchTimeline.
+func (mr *MockClientMockRecorder) GetMatchTimeline(ctx, matchID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMatchTimeline", reflect.TypeOf((*MockClient)(nil).GetMatchTimeline), ctx, matchID)
+}
+
 // GetSupplyDomains mocks base method.
 func (m *MockClient) GetSupplyDomains(ctx context.Context, req *supply_domain_types.GetSupplyDomainsRequest) ([]*supply_domain_types.SupplyDomainResp, error) {
 	m.ctrl.T.Helper()

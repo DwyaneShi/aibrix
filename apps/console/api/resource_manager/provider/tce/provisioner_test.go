@@ -121,6 +121,7 @@ func TestTCEProvisioner_ProvisionListRelease(t *testing.T) {
 
 	// Setup mock for GetScheduledMatch - simulate provisioning to success
 	// First two calls return booking, third returns success
+	mockRMClient.EXPECT().GetMatchTimeline(gomock.Any(), matchId).Return([]scheduled_plan_types.MatchTimelineEntry{}, nil).AnyTimes()
 	mockRMClient.EXPECT().GetScheduledMatch(gomock.Any(), matchId).
 		Return(&scheduled_plan_types.MatchingResult{
 			MatchId: matchId,
@@ -264,6 +265,7 @@ func TestTCEProvisioner_ProvisionFailed(t *testing.T) {
 	provisionID := result.ProvisionID
 
 	// Setup mock for GetScheduledMatch - simulate failure
+	mockRMClient.EXPECT().GetMatchTimeline(gomock.Any(), matchId).Return([]scheduled_plan_types.MatchTimelineEntry{}, nil).AnyTimes()
 	mockRMClient.EXPECT().GetScheduledMatch(gomock.Any(), matchId).
 		Return(&scheduled_plan_types.MatchingResult{
 			MatchId: matchId,
@@ -348,6 +350,7 @@ func TestTCEProvisioner_ReleaseIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	provisionID := result.ProvisionID
 
+	mockRMClient.EXPECT().GetMatchTimeline(gomock.Any(), matchId).Return([]scheduled_plan_types.MatchTimelineEntry{}, nil).AnyTimes()
 	mockRMClient.EXPECT().CancelScheduledMatch(gomock.Any(), matchId).
 		Return(&scheduled_plan_types.MatchingResult{
 			MatchId: matchId,

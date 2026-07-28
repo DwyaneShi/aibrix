@@ -240,16 +240,16 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 			}
 		}
 
-		// Fetch matching order timeline from GPU Center
-		if p.clientset.GPUCenterClient != nil && result.TCE.MatchId != "" {
+		// Fetch matching order timeline from ResourceManagerClient
+		if result.TCE.MatchId != "" {
 			prevTimeline := result.TCE.Timeline
-			if timeline, tErr := p.clientset.GPUCenterClient.GetOrderTimeline(ctx, result.TCE.MatchId); tErr == nil {
+			if timeline, tErr := p.clientset.ResourceManagerClient.GetMatchTimeline(ctx, result.TCE.MatchId); tErr == nil {
 				result.TCE.Timeline = toTCETimelineEntries(timeline)
 				if !reflect.DeepEqual(result.TCE.Timeline, prevTimeline) {
 					upsertProvision = true
 				}
 			} else {
-				klog.V(4).Infof("GetOrderTimeline(%s) failed (non-fatal): %v", result.TCE.MatchId, tErr)
+				klog.V(4).Infof("GetMatchTimeline(%s) failed (non-fatal): %v", result.TCE.MatchId, tErr)
 			}
 		}
 
@@ -706,7 +706,7 @@ func toTCECommitInfo(commitInfo *scheduled_plan_types.CommitInfo) *types.TCEComm
 	}
 }
 
-func toTCETimelineEntries(entries []gpu_center_client.OrderTimelineEntry) []types.MatchingOrderTimelineEntry {
+func toTCETimelineEntries(entries []scheduled_plan_types.MatchTimelineEntry) []types.MatchingOrderTimelineEntry {
 	result := make([]types.MatchingOrderTimelineEntry, 0, len(entries))
 	for _, e := range entries {
 		result = append(result, types.MatchingOrderTimelineEntry{

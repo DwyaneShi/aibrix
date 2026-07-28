@@ -42,4 +42,5 @@ type Client interface {
 	UpdateScheduledMatch(ctx context.Context, id string, query *scheduled_plan_types.MatchingIntentRequest) (*scheduled_plan_types.MatchingResult, error)
 	CommitScheduledMatch(ctx context.Context, id string) (*scheduled_plan_types.MatchingResult, error)
 	GetSupplyDomains(ctx context.Context, req *supply_domain_types.GetSupplyDomainsRequest) ([]*supply_domain_types.SupplyDomainResp, error)
+	GetMatchTimeline(ctx context.Context, matchID string) ([]scheduled_plan_types.MatchTimelineEntry, error)
 }

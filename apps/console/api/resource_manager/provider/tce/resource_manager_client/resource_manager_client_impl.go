@@ -374,3 +374,25 @@ func (impl ClientImpl) GetSupplyDomains(ctx context.Context, req *supply_domain_
 
 	return resp.Result, nil
 }
+
+func (impl ClientImpl) GetMatchTimeline(ctx context.Context, matchID string) ([]scheduled_plan_types.MatchTimelineEntry, error) {
+	req := http.NewGet(impl.getFullUrlPath(fmt.Sprintf("/resource_manager/matching_api/v1/match/%s/timeline", matchID)))
+	bodyBytes, err := impl.sendRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		ResourceManagerResponseBase
+		Result []scheduled_plan_types.MatchTimelineEntry `json:"result,omitempty"`
+	}
+	if err := impl.jsonParser.Unmarshal(bodyBytes, &resp); err != nil {
+		return nil, fmt.Errorf("unmarshal response failed: %w", err)
+	}
+	if resp.StatusCode != 0 {
+		message := resp.StatusMessage
+		return nil, fmt.Errorf("GetMatchTimeline failed: code=%d error=%s", resp.StatusCode, message)
+	}
+
+	return resp.Result, nil
+}

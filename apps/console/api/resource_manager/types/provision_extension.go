@@ -48,7 +48,7 @@ type ExtensionProvisionResultDetails struct {
 }
 
 // MatchingOrderTimelineEntry represents a single state transition in the
-// matching order lifecycle, derived from MatchingDetailResponse timestamps.
+// matching order lifecycle, derived from ResourceManager match timeline API.
 type MatchingOrderTimelineEntry struct {
 	NewStatus        string `json:"new_status"`
 	NewDisplayStatus string `json:"new_display_status"`
