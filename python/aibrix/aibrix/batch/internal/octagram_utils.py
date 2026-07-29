@@ -14,25 +14,42 @@
 
 """Shared helpers for Octagram/TCE internals."""
 
+import re
 from typing import Optional, Tuple
 
 from aibrix import envs
 from aibrix.batch.job_entity import BatchJob
+
+_MAX_OCTAGRAM_NAME_LENGTH = 63
+_JOB_NAME_PREFIX = "batch"
+_JOB_ID_SUFFIX_LENGTH = 8
+_INVALID_DNS_LABEL_CHARS = re.compile(r"[^a-z0-9-]+")
+
+
+def _sanitize_dns_label(value: str) -> str:
+    return _INVALID_DNS_LABEL_CHARS.sub("-", value.lower()).strip("-")
 
 
 def get_job_name(job: BatchJob) -> str:
     """Derive the Octagram workload job_name from a BatchJob.
 
     ``batch-{template_name}-{job_id[:8]}`` when a template is referenced,
-    otherwise ``batch-{job_id[:8]}``. Always lowercased.
+    otherwise ``batch-{job_id[:8]}``. The result is a valid Kubernetes DNS
+    label and preserves the job-id suffix when a long template name is
+    truncated.
     """
     job_id = job.job_id or ""
     aibrix = job.spec.aibrix if job.spec else None
     template_name = aibrix.model_template_name if aibrix else None
+    job_suffix = _sanitize_dns_label(job_id[:_JOB_ID_SUFFIX_LENGTH]) or "job"
 
     if template_name:
-        return f"batch-{template_name}-{job_id[:8]}".lower()
-    return f"batch-{job_id[:8]}".lower()
+        sanitized_template = _sanitize_dns_label(template_name) or "model"
+        reserved_length = len(_JOB_NAME_PREFIX) + len(job_suffix) + 2
+        max_template_length = _MAX_OCTAGRAM_NAME_LENGTH - reserved_length
+        sanitized_template = sanitized_template[:max_template_length].rstrip("-")
+        return f"{_JOB_NAME_PREFIX}-{sanitized_template}-{job_suffix}".lower()
+    return f"{_JOB_NAME_PREFIX}-{job_suffix}".lower()
 
 
 def get_psm(job: BatchJob) -> Optional[str]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,8 @@ _DEFAULT_IDENTITY_TREATMENT_USER = getattr(
 # Compatibility fallbacks for callers that bypass the Console planner.
 _FALLBACK_CPU_CORES_PER_GPU = 16
 _FALLBACK_MEMORY_GIB_PER_GPU = 96
+_MAX_MODEL_IDENTITY_LENGTH = 63
+_INVALID_MODEL_IDENTITY_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 # TCE filesystem and container lifecycle contract.
 _BERNARD_HOST_PATH = "/opt/tiger/bernard"
@@ -97,6 +100,15 @@ _OCTAGRAM_ACCELERATOR_TYPE_MAPPING = {
 
 _OCTAGRAM_XPU_RESOURCE_NAME = "bytedance.com/xpu"
 _OCTAGRAM_NPU_RESOURCE_NAME = "habana.ai/goya"
+
+
+def _sanitize_model_identity(value: str) -> str:
+    normalized = _INVALID_MODEL_IDENTITY_CHARS.sub("-", value.lower()).strip("-_.")
+    return normalized[:_MAX_MODEL_IDENTITY_LENGTH].rstrip("-_.")
+
+
+def _build_served_model_name(job_name: str, model_name: str) -> str:
+    return _sanitize_model_identity(f"{job_name}-{model_name}")
 
 
 def _map_accelerator_type(accelerator_type: Optional[str]) -> str:
@@ -217,8 +229,10 @@ class OctagramManifestRenderer(_RendererSupport):
                 resource.cpu = str(gpu_count * _FALLBACK_CPU_CORES_PER_GPU)
             if not resource.memory:
                 resource.memory = f"{gpu_count * _FALLBACK_MEMORY_GIB_PER_GPU}Gi"
-        model_name = infer_model_name(template.spec.model_source.uri).lower()
-        served_model_name = f"{job_name}-{model_name}"
+        model_name = (
+            spec.model or infer_model_name(template.spec.model_source.uri)
+        ).lower()
+        served_model_name = _build_served_model_name(job_name, model_name)
         console_job_id = spec.aibrix.job_id if spec.aibrix else None
         _, idc, physical_cluster, _ = parse_endpoint_cluster(
             providerSpec.endpoint_cluster
@@ -637,7 +651,9 @@ class OctagramManifestRenderer(_RendererSupport):
         tce_primary_port: str,
         accelerator_count: int,
     ) -> List[Dict[str, Any]]:
-        model_name = infer_model_name(template.spec.model_source.uri)  # must be same
+        model_name = _sanitize_model_identity(
+            infer_model_name(template.spec.model_source.uri)
+        )
         env = [
             {"name": "AIBRIX_LLM_ENGINE", "value": template.spec.engine.type.value},
             {"name": "HDFS_MODEL_PATH", "value": template.spec.model_source.uri},

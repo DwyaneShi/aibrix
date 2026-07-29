@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import types
 from copy import deepcopy
@@ -368,6 +369,48 @@ def test_octagram_manifest_renderer_renders_expected_tce_fields():
             "status": {},
         },
     }
+
+
+def test_octagram_renderer_sanitizes_long_tce_model_identity():
+    model_uri = (
+        "hdfs://harunauswest/home/byte_tce_orchestration/aibrix/models/"
+        "VIDI3_Character_GRPO_Gemma3_12B_short_film_v3_7_filter_ckpt4204_"
+        "character_reward_32gpu_bs128_n4_gen16_fastupd_resp12k_v3_ruinan_"
+        "0626_recover_no_rollouts"
+    )
+    template_spec = _template_spec()
+    template_spec["model_source"]["uri"] = model_uri
+    rendered = _render(
+        spec=_spec(
+            template_name="vidi_v3_a100_40G",
+            template_spec=template_spec,
+            model=model_uri,
+        )
+    )
+
+    workload_name = rendered["metadata"]["name"]
+    served_model_name = rendered["metadata"]["labels"]["model.aibrix.ai/name"]
+    env = _rendered_env(rendered)
+
+    assert workload_name == "batch-vidi-v3-a100-40g-6281d2a8"
+    assert re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", workload_name)
+    assert len(served_model_name) <= 63
+    assert re.fullmatch(r"[a-z0-9]([-a-z0-9._]*[a-z0-9])?", served_model_name)
+    assert served_model_name.startswith(f"{workload_name}-")
+    assert env["HDFS_MODEL_PATH"] == model_uri
+    assert len(env["MODEL_NAME"]) <= 63
+    assert re.fullmatch(r"[a-z0-9]([-a-z0-9._]*[a-z0-9])?", env["MODEL_NAME"])
+    assert env["AIBRIX_SERVED_MODEL_NAME"] == served_model_name
+
+
+def test_octagram_job_name_truncates_template_and_preserves_job_suffix():
+    spec = _spec(template_name=f"vidi_v3_{'long_' * 20}")
+
+    job_name = _job_name("6281d2a8-6281ds2a8-a2", spec)
+
+    assert len(job_name) <= 63
+    assert job_name.endswith("-6281d2a8")
+    assert re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", job_name)
 
 
 def test_octagram_manifest_renderer_uses_workload_psm_for_log_host_paths():
