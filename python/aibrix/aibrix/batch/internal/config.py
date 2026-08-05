@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 from dataclasses import dataclass
 
 AUTHORIZATION_HEADER = "Authorization"
@@ -39,3 +40,63 @@ REGION_DOMAINS = {
         tce_status="http://tce-status-us.byted.org",
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# GPU resource specs
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GpuSpec:
+    """Per-GPU resource specification for a GPU card type."""
+
+    cpu_per_gpu: int
+    mem_per_gpu: int
+
+
+_GPU_TYPE_PREFIXES = ("NVIDIA-GeForce-", "NVIDIA-", "Tesla-")
+_GPU_INTERCONNECT_RE = re.compile(r"-(?:PCIE|SXM\d*)-", re.IGNORECASE)
+_GPU_HBM_RE = re.compile(r"-\d+GB$", re.IGNORECASE)
+_GPU_TYPE_ALIASES: dict[str, str] = {}
+
+# Per-GPU resource specs
+_GPU_SPECS: dict[str, GpuSpec] = {
+    "A100": GpuSpec(cpu_per_gpu=15750, mem_per_gpu=251),
+}
+
+_DEFAULT_CPU_MILLICORES_PER_GPU = 16000
+_DEFAULT_MEM_PER_GPU = 96
+
+
+def normalize_gpu_type(gpu_type: str) -> str:
+    """Normalize a gpu_type string to its canonical short form.
+
+    1. Strip vendor prefixes (NVIDIA-GeForce-, NVIDIA-, Tesla-).
+    2. Remove interconnect suffixes (-PCIE-, -SXM-, -SXM2-, etc.).
+    3. Remove HBM capacity suffixes (-40GB, -80GB, etc.).
+    4. Resolve known aliases.
+    """
+    stripped = gpu_type
+    for prefix in _GPU_TYPE_PREFIXES:
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix) :]
+            break
+    stripped = _GPU_INTERCONNECT_RE.sub("-", stripped)
+    stripped = _GPU_HBM_RE.sub("", stripped)
+    return _GPU_TYPE_ALIASES.get(stripped, stripped)
+
+
+def get_gpu_spec(gpu_type: str) -> GpuSpec:
+    """Look up per-GPU resource spec by gpu_type.
+
+    Returns a default spec if the gpu_type is unknown.
+    """
+    canonical = normalize_gpu_type(gpu_type)
+    return _GPU_SPECS.get(
+        canonical,
+        GpuSpec(
+            cpu_per_gpu=_DEFAULT_CPU_MILLICORES_PER_GPU,
+            mem_per_gpu=_DEFAULT_MEM_PER_GPU,
+        ),
+    )

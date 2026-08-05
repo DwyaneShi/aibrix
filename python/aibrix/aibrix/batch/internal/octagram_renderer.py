@@ -8,6 +8,7 @@ from math import ceil
 from typing import Any, Callable, Dict, List, Optional
 
 from aibrix import envs
+from aibrix.batch.internal.config import get_gpu_spec
 from aibrix.batch.internal.octagram_utils import parse_endpoint_cluster
 from aibrix.batch.job_entity import BatchJobSpec, ResourceDetail, ResourceRequirement
 from aibrix.batch.manifest.engine_adapter import build_engine_args
@@ -27,9 +28,6 @@ _DEFAULT_IDENTITY_TREATMENT_USER = getattr(
     envs, "OCTAGRAM_IDENTITY_USER", "jingyuan.zhang0929"
 )
 
-# Compatibility fallbacks for callers that bypass the Console planner.
-_FALLBACK_CPU_CORES_PER_GPU = 16
-_FALLBACK_MEMORY_GIB_PER_GPU = 96
 _MAX_MODEL_IDENTITY_LENGTH = 63
 _INVALID_MODEL_IDENTITY_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -39,10 +37,7 @@ _BERNARD_TOOLS_HOST_PATH = f"{_BERNARD_HOST_PATH}/bernard_tools"
 _PRE_STOP_COMMAND = (
     "bash",
     "-c",
-    (
-        f"{_BERNARD_TOOLS_HOST_PATH}/bin/pre_stop; "
-        "/home/tiger/.op/docker_pre_stop.sh;"
-    ),
+    (f"{_BERNARD_TOOLS_HOST_PATH}/bin/pre_stop; /home/tiger/.op/docker_pre_stop.sh;"),
 )
 
 
@@ -91,6 +86,11 @@ _READINESS_PROBE = _ExecProbeConfig(
 )
 
 
+# ---------------------------------------------------------------------------
+# Accelerator mapping / formatting helpers
+# ---------------------------------------------------------------------------
+
+
 # The matching/planner layer uses fully-qualified accelerator SKU names while
 # Octagram nodes are labeled with vendor-stripped names. Translate on dispatch;
 # unmapped values pass through unchanged.
@@ -115,6 +115,22 @@ def _map_accelerator_type(accelerator_type: Optional[str]) -> str:
     if not accelerator_type:
         return ""
     return _OCTAGRAM_ACCELERATOR_TYPE_MAPPING.get(accelerator_type, accelerator_type)
+
+
+def _format_cpu_millicores(millicores: int) -> str:
+    if millicores % 1000 == 0:
+        return str(millicores // 1000)
+    return f"{millicores}m"
+
+
+def _default_resource_requests(resource: ResourceRequirement) -> tuple[str, str]:
+    """Return (cpu, memory) defaults based on gpu_type lookup."""
+    gpu_type = resource.accelerator_type or ""
+    gpu_count = resource.accelerator_count or 0
+    spec = get_gpu_spec(gpu_type)
+    cpu = _format_cpu_millicores(gpu_count * spec.cpu_per_gpu)
+    memory = f"{gpu_count * spec.mem_per_gpu}Gi"
+    return cpu, memory
 
 
 def _accelerator_category(resource: ResourceRequirement) -> str:
@@ -225,10 +241,11 @@ class OctagramManifestRenderer(_RendererSupport):
         # Explicit resource allocation values still take precedence.
         gpu_count = resource.accelerator_count or 0
         if gpu_count > 0:
+            default_cpu, default_mem = _default_resource_requests(resource)
             if not resource.cpu:
-                resource.cpu = str(gpu_count * _FALLBACK_CPU_CORES_PER_GPU)
+                resource.cpu = default_cpu
             if not resource.memory:
-                resource.memory = f"{gpu_count * _FALLBACK_MEMORY_GIB_PER_GPU}Gi"
+                resource.memory = default_mem
         model_name = (
             spec.model or infer_model_name(template.spec.model_source.uri)
         ).lower()
