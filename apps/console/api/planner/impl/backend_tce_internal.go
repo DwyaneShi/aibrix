@@ -39,6 +39,15 @@ var tceMatchingAcceleratorTypeAliases = map[string]string{
 	"A100-SXM4-80GB":        "A100-SXM-80GB",
 }
 
+const (
+	tceRTX6000DAcceleratorType = "NVIDIA-RTX-6000D"
+	tceRTX6000DCPUCoresPerGPU  = 14
+)
+
+var tceMatchingCPUCoresPerGPU = map[string]int{
+	tceRTX6000DAcceleratorType: tceRTX6000DCPUCoresPerGPU,
+}
+
 func init() {
 	RegisterBackend(rmtypes.ResourceProvisionTypeTCE, func(provisioner.Provisioner) plannerBackend {
 		return &tcePlannerBackend{}
@@ -77,6 +86,12 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 	}
 	endTime := startTime.Add(timeWindow)
 
+	group := buildProvisionGroupPlan(gpuType, gpusPerReplica, requestedReplicas(req))
+	if cpuCoresPerGPU, ok := tceMatchingCPUCoresPerGPU[gpuType]; ok && gpusPerReplica > 0 {
+		cpuCoresPerReplica := cpuCoresPerGPU * gpusPerReplica
+		group.CpuCoresPerReplica = &cpuCoresPerReplica
+	}
+
 	spec = rmtypes.ResourceProvisionSpec{
 		Credential: rmtypes.ResourceCredential{
 			Provider: rmtypes.ResourceProvisionTypeTCE,
@@ -84,7 +99,7 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 				TCE: &rmtypes.TCECredential{},
 			},
 		},
-		Groups: &[]rmtypes.ResourceGroupSpec{buildProvisionGroupPlan(gpuType, gpusPerReplica, requestedReplicas(req))},
+		Groups: &[]rmtypes.ResourceGroupSpec{group},
 		TimeWindow: &rmtypes.TimeWindow{
 			StartTime: startTime,
 			EndTime:   &endTime,

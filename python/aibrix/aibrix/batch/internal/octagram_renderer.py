@@ -226,6 +226,7 @@ class OctagramManifestRenderer(_RendererSupport):
         tce_env: str = _DEFAULT_TCE_ENV,
         tce_stage: str = _DEFAULT_TCE_STAGE,
         tce_primary_port: str = _DEFAULT_TCE_PRIMARY_PORT,
+        served_model_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         template, _ = self._resolve(spec)
         self.template = template
@@ -249,7 +250,9 @@ class OctagramManifestRenderer(_RendererSupport):
         model_name = (
             spec.model or infer_model_name(template.spec.model_source.uri)
         ).lower()
-        served_model_name = _build_served_model_name(job_name, model_name)
+        served_model_name = served_model_name or _build_served_model_name(
+            job_name, model_name
+        )
         console_job_id = spec.aibrix.job_id if spec.aibrix else None
         _, idc, physical_cluster, _ = parse_endpoint_cluster(
             providerSpec.endpoint_cluster

@@ -42,6 +42,13 @@ func buildTCEResourceAllocation(prov *rmtypes.ProvisionResult, fallbackReplicas 
 		ProvisionID: prov.ProvisionID,
 	}
 
+	if hasMultipleTCEQueues(prov) {
+		allocation.ResourceDetails = buildTCEResourceDetails(prov, fallbackReplicas)
+		if len(allocation.ResourceDetails) > 1 {
+			return allocation
+		}
+	}
+
 	details := &plannerclient.ResourceDetails{
 		Provider: string(rmtypes.ResourceProvisionTypeTCE),
 	}
@@ -62,6 +69,133 @@ func buildTCEResourceAllocation(prov *rmtypes.ProvisionResult, fallbackReplicas 
 
 	allocation.ResourceDetails = []plannerclient.ResourceDetails{*details}
 	return allocation
+}
+
+type tceDeploymentTarget struct {
+	role                string
+	endpointCluster     string
+	resourcePoolName    string
+	logicalCluster      string
+	acceleratorType     string
+	acceleratorCategory string
+	acceleratorCount    int
+}
+
+type tceQueueTarget struct {
+	endpointCluster  string
+	resourcePoolName string
+}
+
+func hasMultipleTCEQueues(prov *rmtypes.ProvisionResult) bool {
+	if prov.TCE == nil || prov.TCE.GroupResults == nil {
+		return false
+	}
+
+	queues := make(map[tceQueueTarget]struct{})
+	for _, group := range *prov.TCE.GroupResults {
+		for _, segment := range group.AllocationSegments {
+			if !segment.Allocated || segment.CommitInfo == nil ||
+				segment.CommitInfo.ResourcePoolName == nil {
+				continue
+			}
+			queue := tceQueueTarget{
+				endpointCluster:  segment.Region.String(),
+				resourcePoolName: trimResourcePoolSuffix(*segment.CommitInfo.ResourcePoolName),
+			}
+			queues[queue] = struct{}{}
+			if len(queues) > 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// buildTCEResourceDetails keeps distinct deployment targets separate while
+// merging allocation segments that resolve to the same region, queue and shape.
+func buildTCEResourceDetails(
+	prov *rmtypes.ProvisionResult,
+	fallbackReplicas int,
+) []plannerclient.ResourceDetails {
+	if prov.TCE == nil || prov.TCE.GroupResults == nil {
+		return nil
+	}
+
+	details := make([]plannerclient.ResourceDetails, 0)
+	targetIndexes := make(map[tceDeploymentTarget]int)
+	for _, group := range *prov.TCE.GroupResults {
+		role := defaultRoleName
+		if group.GroupRole != nil && *group.GroupRole != "" {
+			role = *group.GroupRole
+		}
+		for _, segment := range group.AllocationSegments {
+			if !segment.Allocated || segment.Count == nil || *segment.Count <= 0 {
+				continue
+			}
+
+			replicas := fallbackReplicas
+			if segment.Replicas != nil && *segment.Replicas > 0 {
+				replicas = *segment.Replicas
+			}
+			if *segment.Count%replicas != 0 {
+				klog.Errorf(
+					"TCE allocation segment %q has accelerator count %d that is not divisible by replica count %d",
+					segment.Id,
+					*segment.Count,
+					replicas,
+				)
+				continue
+			}
+
+			resourcePoolName := ""
+			if segment.CommitInfo != nil && segment.CommitInfo.ResourcePoolName != nil {
+				resourcePoolName = trimResourcePoolSuffix(*segment.CommitInfo.ResourcePoolName)
+			}
+			if resourcePoolName == "" {
+				klog.Errorf("TCE allocation segment %q has no resource pool", segment.Id)
+				continue
+			}
+
+			acceleratorCategory := segment.AcceleratorCategory
+			if acceleratorCategory == "" {
+				acceleratorCategory = "gpu"
+			}
+			target := tceDeploymentTarget{
+				role:                role,
+				endpointCluster:     segment.Region.String(),
+				resourcePoolName:    resourcePoolName,
+				logicalCluster:      segment.Region.LogicalCluster,
+				acceleratorType:     segment.AcceleratorType,
+				acceleratorCategory: acceleratorCategory,
+				acceleratorCount:    *segment.Count / replicas,
+			}
+			if index, ok := targetIndexes[target]; ok {
+				details[index].Replica += replicas
+				details[index].Resources[0].Replica += replicas
+				continue
+			}
+
+			targetIndexes[target] = len(details)
+			details = append(details, plannerclient.ResourceDetails{
+				Provider:         string(rmtypes.ResourceProvisionTypeTCE),
+				EndpointCluster:  target.endpointCluster,
+				ResourcePoolName: target.resourcePoolName,
+				SaleMode:         "scheduled",
+				QoSLevel:         "shared_cores",
+				LogicalCluster:   target.logicalCluster,
+				GpuType:          target.acceleratorType,
+				Replica:          replicas,
+				Resources: []plannerclient.ResourceItem{{
+					Name:                target.role,
+					Replica:             replicas,
+					AcceleratorType:     target.acceleratorType,
+					AcceleratorCategory: target.acceleratorCategory,
+					AcceleratorCount:    target.acceleratorCount,
+				}},
+			})
+		}
+	}
+	return details
 }
 
 func replicasFromProvisionSpec(spec rmtypes.ResourceProvisionSpec) int {

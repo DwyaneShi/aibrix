@@ -33,9 +33,9 @@ import (
 	"github.com/vllm-project/aibrix/apps/console/api/store"
 )
 
-// fileHTTPClientTimeout bounds proxy requests to the metadata service so a slow
-// or hung upstream can't pin file handler goroutines indefinitely.
-const fileHTTPClientTimeout = 60 * time.Second
+// Large cross-region batch uploads can spend several minutes transferring and
+// persisting before MDS returns the file metadata.
+const fileHTTPClientTimeout = 30 * time.Minute
 
 const (
 	fileOperationUpload      = "upload"

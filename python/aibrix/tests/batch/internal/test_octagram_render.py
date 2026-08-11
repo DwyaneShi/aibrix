@@ -668,7 +668,7 @@ def test_octagram_manifest_renderer_omits_empty_cpu_and_memory_fields():
 def test_octagram_manifest_renderer_uses_generic_cpu_fallback_for_legacy_request():
     rendered = _render(
         detail=_resource_detail(
-            accelerator_type="A100-SXM4-40GB",
+            accelerator_type="NVIDIA-H100",
             cpu=None,
             memory=None,
             accelerator_count=8,
@@ -686,6 +686,37 @@ def test_octagram_manifest_renderer_uses_generic_cpu_fallback_for_legacy_request
     assert pod_annotations["pod.tce.kubernetes.io/requestCpuUserDemand"] == "128"
     assert resources["cpu"] == {"request": "128", "limit": "128"}
     assert resources["memory"] == {"request": "768Gi", "limit": "768Gi"}
+
+
+def test_octagram_manifest_renderer_uses_rtx_6000d_package_defaults():
+    rendered = _render(
+        detail=_resource_detail(
+            accelerator_type="NVIDIA-RTX-6000D",
+            cpu=None,
+            memory=None,
+            accelerator_count=2,
+        )
+    )
+
+    deployment_annotations = rendered["spec"]["deploymentMeta"]["annotations"]
+    resources = rendered["spec"]["podBase"]["containers"][0]["resources"]
+    node_selector = rendered["spec"]["podBase"]["nodeSelector"]
+
+    assert (
+        deployment_annotations["deployment.tce.kubernetes.io/gpu-type"]
+        == "NVIDIA-RTX-6000D"
+    )
+    assert (
+        deployment_annotations["deployment.tce.kubernetes.io/requestCpuUserDemand"]
+        == "28"
+    )
+    assert (
+        deployment_annotations["deployment.tce.kubernetes.io/requestMemUserDemand"]
+        == "176Gi"
+    )
+    assert node_selector["accelerator"] == "NVIDIA-RTX-6000D"
+    assert resources["cpu"] == {"request": "28", "limit": "28"}
+    assert resources["memory"] == {"request": "176Gi", "limit": "176Gi"}
 
 
 def test_octagram_manifest_renderer_only_canonicalizes_nvidia_prefixed_a100():
@@ -720,7 +751,7 @@ def test_octagram_manifest_renderer_keeps_explicit_cpu_request():
     resources = rendered["spec"]["podBase"]["containers"][0]["resources"]
 
     assert resources["cpu"] == {"request": "126", "limit": "126"}
-    assert resources["memory"] == {"request": "768Gi", "limit": "768Gi"}
+    assert resources["memory"] == {"request": "2008Gi", "limit": "2008Gi"}
 
 
 def test_octagram_manifest_renderer_adds_scheduled_feature_gate_conditionally():

@@ -28,6 +28,7 @@ from aibrix.batch.internal.octagram_runtime import (
     _MODEL_DISCOVERY_WAIT_SLICE_SECONDS,
     OctagramHandle,
     OctagramRuntime,
+    _CombinedEndpointSource,
 )
 from aibrix.batch.job_driver.runtime import (
     RUNTIME_WAIT_MODE_PROVISION,
@@ -43,6 +44,8 @@ from aibrix.batch.job_entity import (
     BatchJobStatus,
     JobRuntimeRef,
     ObjectMeta,
+    ResourceDetail,
+    ResourceRequirement,
     TypeMeta,
 )
 from aibrix.batch.state import JobEntityManager
@@ -193,6 +196,24 @@ def _handle() -> OctagramHandle:
     )
 
 
+class LegacySingleQueueRenderer(FakeOctagramRenderer):
+    def render(
+        self,
+        job_id: str,
+        job_name: str,
+        spec: Any,
+        provider_spec: Any,
+        namespace: str = "default",
+    ) -> dict[str, Any]:
+        return super().render(
+            job_id,
+            job_name,
+            spec,
+            provider_spec,
+            namespace=namespace,
+        )
+
+
 @pytest.mark.asyncio
 async def test_connect_uses_handle_request_timeout(
     monkeypatch: pytest.MonkeyPatch,
@@ -207,6 +228,92 @@ async def test_connect_uses_handle_request_timeout(
     assert endpoint.source is not None
     channels = await endpoint.source.channels()
     assert channels[0]._timeout == 123.0
+
+
+@pytest.mark.asyncio
+async def test_octagram_runtime_manages_multiple_queue_workloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _make_job()
+    allocation = job.spec.aibrix.resource_allocation
+    allocation.resource_details.append(
+        ResourceDetail(
+            provider="tce",
+            endpoint_cluster="zone/LQ/cluster-b/default",
+            resource_pool_name="compute-lq",
+            salemode="scheduled",
+            resources=[
+                ResourceRequirement(
+                    accelerator_type="NVIDIA-A10",
+                    accelerator_count=1,
+                    replica=1,
+                )
+            ],
+        )
+    )
+
+    gateway = "https://octagram-gateway.example.test"
+    primary_url = (
+        f"{gateway}/api/v1/clusters/cluster-a-HL/namespaces/default/"
+        "deploymentworkloads/batch-job-1234"
+    )
+    supplemental_name = "batch-mock-template-job-1234-allocation-1"
+    supplemental_url = (
+        f"{gateway}/api/v1/clusters/cluster-b-LQ/namespaces/default/"
+        f"deploymentworkloads/{supplemental_name}"
+    )
+    runtime = _runtime(
+        FakeHttpxClientWrapper(
+            {
+                "POST": [
+                    _response("POST", primary_url, 200, payload={"data": {}}),
+                    _response("POST", supplemental_url, 200, payload={"data": {}}),
+                ]
+            }
+        ),
+        monkeypatch,
+        renderer=FakeOctagramRenderer(),
+    )
+
+    handle = await runtime._provision(job, job.job_id)
+
+    assert handle.workload_name == "batch-job-1234"
+    assert len(handle.supplemental) == 1
+    assert handle.supplemental[0].workload_name == supplemental_name
+    assert handle.supplemental[0].model_name == handle.model_name
+    assert handle.supplemental[0].psm == "fake-psm.service.lq"
+
+    execution = runtime._build_runtime_ref(job)
+    assert execution is not None
+    persisted_execution = JobRuntimeRef.model_validate_json(
+        execution.model_dump_json(by_alias=True, exclude_none=True)
+    )
+    assert persisted_execution.reconnect_payload is not None
+    assert persisted_execution.reconnect_payload["cluster"] == "cluster-a-HL"
+    assert persisted_execution.reconnect_payload["workloadName"] == "batch-job-1234"
+    assert persisted_execution.reconnect_payload["modelName"] == "batch-job-1234"
+    assert persisted_execution.reconnect_payload["replicas"] == 1
+    assert len(persisted_execution.reconnect_payload["supplementalWorkloads"]) == 1
+
+    reloaded_runtime = _runtime(FakeHttpxClientWrapper({}), monkeypatch)
+    reloaded = await reloaded_runtime._load_handle(job, job.job_id, execution)
+    assert reloaded is not None
+    assert [item.workload_name for item in reloaded.supplemental] == [
+        supplemental_name
+    ]
+
+    runtime._context.model_discovery = cast(ModelDiscovery, FakeModelDiscovery())
+    endpoint = await runtime._connect(handle)
+    assert isinstance(endpoint.source, _CombinedEndpointSource)
+
+    deleted: list[str] = []
+
+    async def _delete_workload(workload: OctagramHandle) -> None:
+        deleted.append(workload.workload_name)
+
+    monkeypatch.setattr(runtime, "_delete_workload", _delete_workload)
+    await runtime._teardown(handle)
+    assert deleted == [supplemental_name, "batch-job-1234"]
 
 
 def _runtime(
@@ -913,7 +1020,7 @@ async def test_octagram_runtime_builds_execution_ref_with_current_payload_shape(
             {"POST": [_response("POST", base_url, 200, payload={"data": {}})]}
         ),
         monkeypatch,
-        renderer=FakeOctagramRenderer(),
+        renderer=LegacySingleQueueRenderer(psm="fake-psm.service.my2"),
     )
     await runtime._provision(job, job.job_id)
 
@@ -927,7 +1034,7 @@ async def test_octagram_runtime_builds_execution_ref_with_current_payload_shape(
         "namespace": "default",
         "workloadName": "batch-job-1234",
         "modelName": "batch-job-1234",
-        "psm": "fake-psm.service.hl",
+        "psm": "fake-psm.service.my2",
         "baseUrl": None,
         "replicas": 1,
     }

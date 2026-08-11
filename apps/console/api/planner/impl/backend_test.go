@@ -126,6 +126,48 @@ func TestTCEPlannerBackendScheduleCanonicalizesLegacyA100Types(t *testing.T) {
 	}
 }
 
+func TestTCEPlannerBackendScheduleUsesRTX6000DPackageResources(t *testing.T) {
+	backend := &tcePlannerBackend{}
+	spec, err := backend.Schedule(context.Background(), &plannerapi.EnqueueRequest{
+		ResourceRequest: &plannerapi.ResourceRequest{Replicas: 3},
+		ModelTemplate: &plannerapi.ModelTemplateRef{
+			Spec: []byte(`{
+				"accelerator": {
+					"type": "NVIDIA-RTX-6000D",
+					"count": 2
+				}
+			}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if spec.Groups == nil || len(*spec.Groups) != 1 {
+		t.Fatalf("groups = %#v, want one group", spec.Groups)
+	}
+
+	group := (*spec.Groups)[0]
+	if group.GpusPerReplica != 2 {
+		t.Fatalf("gpus per replica = %d, want 2", group.GpusPerReplica)
+	}
+	if group.Replicas == nil || *group.Replicas != 3 {
+		t.Fatalf("replicas = %v, want 3", group.Replicas)
+	}
+	if group.CpuCoresPerReplica == nil || *group.CpuCoresPerReplica != 28 {
+		t.Fatalf("cpu cores per replica = %v, want 28", group.CpuCoresPerReplica)
+	}
+	if group.AcceleratorPreference == nil ||
+		group.AcceleratorPreference.PreferredTypes == nil {
+		t.Fatalf("accelerator preference = %#v, want preferred types", group.AcceleratorPreference)
+	}
+	if got := *group.AcceleratorPreference.PreferredTypes; !reflect.DeepEqual(
+		got,
+		[]string{"NVIDIA-RTX-6000D"},
+	) {
+		t.Fatalf("preferred types = %v, want [NVIDIA-RTX-6000D]", got)
+	}
+}
+
 func TestDefaultPlannerBackendBuildResourceAllocationIncludesReplicas(t *testing.T) {
 	backend := &defaultPlannerBackend{provider: rmtypes.ResourceProvisionTypeKubernetes}
 	allocation := backend.BuildResourceAllocation(rmtypes.ResourceProvisionSpec{
@@ -154,7 +196,8 @@ func TestDefaultPlannerBackendBuildResourceAllocationIncludesReplicas(t *testing
 }
 
 func TestBuildTCEResourceAllocationFallsBackToRequestedReplicas(t *testing.T) {
-	count := 1
+	count := 4
+	pool := "compute-hl-guarantee"
 	groupResults := rmtypes.TCEGroupResults{
 		{
 			AllocationSegments: []rmtypes.TCEAllocationSegment{
@@ -162,6 +205,8 @@ func TestBuildTCEResourceAllocationFallsBackToRequestedReplicas(t *testing.T) {
 					AcceleratorType:     "NVIDIA-L20",
 					AcceleratorCategory: "gpu",
 					Count:               &count,
+					Allocated:           true,
+					CommitInfo:          &rmtypes.TCECommitInfo{ResourcePoolName: &pool},
 				},
 			},
 		},
@@ -192,6 +237,120 @@ func TestBuildTCEResourceAllocationFallsBackToRequestedReplicas(t *testing.T) {
 	}
 	if detail.Resources[0].Replica != 4 {
 		t.Fatalf("inner replica = %d, want 4", detail.Resources[0].Replica)
+	}
+}
+
+func TestBuildTCEResourceAllocationPreservesMultipleQueues(t *testing.T) {
+	count := 8
+	replicas := 1
+	firstPool := "compute-hl-guarantee"
+	secondPool := "compute-lq-guarantee"
+	groupResults := rmtypes.TCEGroupResults{{
+		AllocationSegments: []rmtypes.TCEAllocationSegment{
+			{
+				Id:              "segment-hl",
+				Allocated:       true,
+				Region:          rmtypes.TCERegion{Dc: "HL", PhysicalCluster: "CloudNative"},
+				AcceleratorType: "NVIDIA-A10",
+				Count:           &count,
+				Replicas:        &replicas,
+				CommitInfo:      &rmtypes.TCECommitInfo{ResourcePoolName: &firstPool},
+			},
+			{
+				Id:              "segment-lq",
+				Allocated:       true,
+				Region:          rmtypes.TCERegion{Dc: "LQ", PhysicalCluster: "Federation"},
+				AcceleratorType: "NVIDIA-A10",
+				Count:           &count,
+				Replicas:        &replicas,
+				CommitInfo:      &rmtypes.TCECommitInfo{ResourcePoolName: &secondPool},
+			},
+		},
+	}}
+
+	allocation := buildTCEResourceAllocation(&rmtypes.ProvisionResult{
+		ProvisionID: "prov-multi-queue",
+		ExtensionProvisionResultDetails: rmtypes.ExtensionProvisionResultDetails{
+			TCE: &rmtypes.TCEProvisionDetail{GroupResults: &groupResults},
+		},
+	}, 2)
+
+	if len(allocation.ResourceDetails) != 2 {
+		t.Fatalf("resource details len = %d, want 2", len(allocation.ResourceDetails))
+	}
+	first, second := allocation.ResourceDetails[0], allocation.ResourceDetails[1]
+	if first.ResourcePoolName != "compute-hl" || second.ResourcePoolName != "compute-lq" {
+		t.Fatalf(
+			"resource pools = [%q, %q], want [compute-hl, compute-lq]",
+			first.ResourcePoolName,
+			second.ResourcePoolName,
+		)
+	}
+	if first.EndpointCluster == second.EndpointCluster {
+		t.Fatalf("endpoint clusters must remain distinct: %q", first.EndpointCluster)
+	}
+}
+
+func TestBuildTCEResourceAllocationKeepsSingleQueueBehavior(t *testing.T) {
+	firstCount := 8
+	secondCount := 16
+	firstReplicas := 1
+	secondReplicas := 2
+	pool := "compute-hl-guarantee"
+	region := rmtypes.TCERegion{Dc: "HL", PhysicalCluster: "CloudNative"}
+	groupRole := "worker"
+	groupResults := rmtypes.TCEGroupResults{{
+		GroupRole: &groupRole,
+		AllocationSegments: []rmtypes.TCEAllocationSegment{
+			{
+				Id:              "segment-a",
+				Allocated:       true,
+				Region:          region,
+				AcceleratorType: "NVIDIA-A10",
+				Count:           &firstCount,
+				Replicas:        &firstReplicas,
+				CommitInfo:      &rmtypes.TCECommitInfo{ResourcePoolName: &pool},
+			},
+			{
+				Id:              "segment-b",
+				Allocated:       true,
+				Region:          region,
+				AcceleratorType: "NVIDIA-L20",
+				Count:           &secondCount,
+				Replicas:        &secondReplicas,
+				CommitInfo:      &rmtypes.TCECommitInfo{ResourcePoolName: &pool},
+			},
+		},
+	}}
+
+	allocation := buildTCEResourceAllocation(&rmtypes.ProvisionResult{
+		ProvisionID: "prov-merged",
+		ExtensionProvisionResultDetails: rmtypes.ExtensionProvisionResultDetails{
+			TCE: &rmtypes.TCEProvisionDetail{GroupResults: &groupResults},
+		},
+	}, 1)
+
+	if len(allocation.ResourceDetails) != 1 {
+		t.Fatalf("resource details len = %d, want 1", len(allocation.ResourceDetails))
+	}
+	want := plannerclient.ResourceDetails{
+		Provider:         string(rmtypes.ResourceProvisionTypeTCE),
+		EndpointCluster:  region.String(),
+		ResourcePoolName: "compute-hl",
+		SaleMode:         "scheduled",
+		QoSLevel:         "shared_cores",
+		GpuType:          "NVIDIA-A10",
+		Replica:          firstReplicas,
+		Resources: []plannerclient.ResourceItem{{
+			Name:                defaultRoleName,
+			Replica:             firstReplicas,
+			AcceleratorType:     "NVIDIA-A10",
+			AcceleratorCategory: "gpu",
+			AcceleratorCount:    firstCount,
+		}},
+	}
+	if got := allocation.ResourceDetails[0]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("single queue detail = %#v, want legacy detail %#v", got, want)
 	}
 }
 

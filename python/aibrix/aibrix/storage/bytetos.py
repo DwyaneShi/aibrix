@@ -42,6 +42,22 @@ _TOS_RETRY_BASE_DELAY_SECONDS = 0.2
 _TOS_RETRY_MAX_DELAY_SECONDS = 2.0
 _MULTIPART_THRESHOLD_OFFSET_BYTES = 1
 _MIN_STAGED_CHUNK_SIZE_BYTES = 1
+_RETRYABLE_NETWORK_ERROR_NAMES = {
+    "ConnectTimeout",
+    "ConnectionError",
+    "ConnectionRefusedError",
+    "ConnectTimeoutError",
+    "MaxRetryError",
+    "NewConnectionError",
+    "ReadTimeout",
+    "ReadTimeoutError",
+    "Timeout",
+    "TimeoutError",
+}
+_RETRYABLE_NETWORK_ERROR_MESSAGES = (
+    "Connection refused",
+    "Failed to establish a new connection",
+)
 
 
 class TOSStorage(BaseStorage2):
@@ -174,12 +190,31 @@ class TOSStorage(BaseStorage2):
         if self._is_not_found_error(error):
             return False
 
-        http_status_code = getattr(error, "status_code", None)
-        if str(http_status_code) in _RETRYABLE_HTTP_STATUS_CODES:
-            return True
+        current_error: Optional[BaseException] = error
+        seen_errors: set[int] = set()
+        while current_error is not None and id(current_error) not in seen_errors:
+            seen_errors.add(id(current_error))
 
-        tos_error_code = getattr(error, "code", None)
-        return str(tos_error_code) in _RETRYABLE_TOS_ERROR_CODES
+            http_status_code = getattr(current_error, "status_code", None)
+            if str(http_status_code) in _RETRYABLE_HTTP_STATUS_CODES:
+                return True
+
+            tos_error_code = getattr(current_error, "code", None)
+            if str(tos_error_code) in _RETRYABLE_TOS_ERROR_CODES:
+                return True
+
+            if type(current_error).__name__ in _RETRYABLE_NETWORK_ERROR_NAMES:
+                return True
+
+            if any(
+                message in str(current_error)
+                for message in _RETRYABLE_NETWORK_ERROR_MESSAGES
+            ):
+                return True
+
+            current_error = current_error.__cause__ or current_error.__context__
+
+        return False
 
     def _call_with_tos_retries(
         self, description: str, call: Any, *, wrap_error: bool = True
@@ -190,9 +225,11 @@ class TOSStorage(BaseStorage2):
         for attempt in range(1, max_attempts + 1):
             try:
                 return call()
-            except (TosException, TosClientError, TosServerError) as e:
+            except Exception as e:
                 if attempt >= max_attempts or not self._is_retryable_tos_error(e):
-                    if not wrap_error:
+                    if not wrap_error or not isinstance(
+                        e, (TosException, TosClientError, TosServerError)
+                    ):
                         raise
                     raise ValueError(f"Failed to {description}: {e}") from e
 
@@ -648,9 +685,15 @@ class TOSStorage(BaseStorage2):
 
         def _get_object():
             try:
-                if range_start is None and range_end is None:
-                    return self.client.get_object(key)
-                return self.client.get_object_range(key, range_start, range_end)
+                return self._call_with_tos_retries(
+                    f"get object {key}",
+                    lambda: (
+                        self.client.get_object(key)
+                        if range_start is None and range_end is None
+                        else self.client.get_object_range(key, range_start, range_end)
+                    ),
+                    wrap_error=False,
+                )
             except (TosException, TosClientError, TosServerError) as e:
                 if self._is_not_found_error(e):
                     raise FileNotFoundError(f"Object not found: {key}")

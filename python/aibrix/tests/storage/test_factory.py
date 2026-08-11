@@ -347,6 +347,76 @@ class TestStorageFactory:
 
         assert storage._is_retryable_tos_error(error) is expected
 
+    def test_tos_connection_error_in_exception_chain_is_retryable(self, monkeypatch):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+
+        NewConnectionError = type("NewConnectionError", (Exception,), {})
+        connection_error = NewConnectionError(
+            "Failed to establish a new connection: [Errno 111] Connection refused"
+        )
+        sdk_error = RuntimeError(
+            "HTTPConnectionPool: Max retries exceeded with url: "
+            "/.multipart/upload/part_08257"
+        )
+        sdk_error.__cause__ = connection_error
+
+        assert storage._is_retryable_tos_error(sdk_error) is True
+
+        flattened_sdk_error = RuntimeError(
+            "HTTPConnectionPool: Max retries exceeded with url: "
+            "/.multipart/upload/part_08257 "
+            "(Caused by NewConnectionError: Failed to establish a new connection: "
+            "[Errno 111] Connection refused)"
+        )
+        assert storage._is_retryable_tos_error(flattened_sdk_error) is True
+
+    def test_tos_get_object_retries_connection_refused(self, monkeypatch):
+        self._install_fake_bytedtos(monkeypatch)
+        storage = create_storage(
+            StorageType.TOS,
+            config=StorageConfig(max_retries=2),
+            bucket_name="test-bucket",
+            access_key="ak",
+            secret_key="sk",
+            idc="mya",
+            service="toutiao.tos.tosapi",
+            cluster="default",
+            remote_psm="inf.aibrix.metadata",
+        )
+
+        import aibrix.storage.bytetos as bytetos_mod
+
+        monkeypatch.setattr(bytetos_mod.time, "sleep", lambda _: None)
+        calls = []
+
+        def get_object(key):
+            calls.append(key)
+            if len(calls) == 1:
+                raise ConnectionRefusedError(
+                    "[Errno 111] Failed to establish a new connection"
+                )
+            return types.SimpleNamespace(data=b"part-data")
+
+        storage.client.get_object = get_object
+
+        result = asyncio.run(storage.get_object(".multipart/upload/part_08257"))
+
+        assert result == b"part-data"
+        assert calls == [
+            ".multipart/upload/part_08257",
+            ".multipart/upload/part_08257",
+        ]
+
     def test_tos_object_exists_does_not_retry_status_in_object_name(self, monkeypatch):
         self._install_fake_bytedtos(monkeypatch)
         storage = create_storage(

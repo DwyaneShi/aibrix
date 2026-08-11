@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -26,6 +27,7 @@ from aibrix.batch.internal.config import AUTHORIZATION_HEADER, REGION_DOMAINS
 from aibrix.batch.internal.octagram_utils import (
     get_job_name,
     get_psm,
+    get_workload_name,
     parse_endpoint_cluster,
 )
 from aibrix.batch.internal.utils import async_retry
@@ -162,21 +164,41 @@ class OctagramDeploymentDetailProvider:
             )
             return None
 
-        zone, idc, physical_cluster, logical_cluster = parse_endpoint_cluster(
-            resource_details[0].endpoint_cluster
-        )
         namespace = "default"
-        return await self._get_deployment_detail(
-            ctx,
-            zone,
-            idc,
-            physical_cluster,
-            logical_cluster,
-            namespace,
-            psm,
-            job_id,
-            job_name,
+        if len(resource_details) == 1:
+            return await self._get_deployment_detail(
+                ctx,
+                *parse_endpoint_cluster(resource_details[0].endpoint_cluster),
+                namespace,
+                psm,
+                job_id,
+                job_name,
+            )
+
+        details = await asyncio.gather(
+            *(
+                self._get_deployment_detail(
+                    ctx,
+                    *parse_endpoint_cluster(detail.endpoint_cluster),
+                    namespace,
+                    psm,
+                    job_id,
+                    get_workload_name(job_name, index),
+                )
+                for index, detail in enumerate(resource_details)
+            )
         )
+        available = [detail for detail in details if detail is not None]
+        if not available:
+            return None
+
+        result = available[0]
+        result["workloads"] = [
+            workload
+            for detail in available
+            for workload in detail.get("workloads", [])
+        ]
+        return result
 
     async def _get_deployment_detail(
         self,

@@ -201,9 +201,13 @@ class FakeOctagramRenderer:
         spec,
         provider_spec,
         namespace: str = "default",
+        served_model_name: Optional[str] = None,
     ) -> dict[str, Any]:
-        del job_name, spec, provider_spec
-        workload_name = f"batch-{job_id[:8]}"
+        del spec, provider_spec
+        workload_name = (
+            f"batch-{job_id[:8]}" if served_model_name is None else job_name
+        )
+        model_name = served_model_name or workload_name
         return {
             "apiVersion": "core.tce.byted.org/v1alpha1",
             "kind": "DeploymentWorkload",
@@ -213,7 +217,7 @@ class FakeOctagramRenderer:
                 "labels": {
                     "name": workload_name,
                     "batch.aibrix.ai/job_id": job_id,
-                    "model.aibrix.ai/name": workload_name,
+                    "model.aibrix.ai/name": model_name,
                     "psm": self.psm,
                 },
             },

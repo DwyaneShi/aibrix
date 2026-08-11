@@ -116,6 +116,7 @@ const GPU_CATALOG: GpuSku[] = [
   { type: 'NVIDIA-L40S', label: 'NVIDIA L40S (48 GB, PCIe)', vramGb: 48, interconnect: 'pcie' },
   { type: 'NVIDIA-H20', label: 'NVIDIA H20 (96 GB, NVLink)', vramGb: 96, interconnect: 'nvlink' },
   { type: 'NVIDIA-H30', label: 'NVIDIA H30 (96 GB, NVLink)', vramGb: 96, interconnect: 'nvlink' },
+  { type: 'NVIDIA-RTX-6000D', label: 'NVIDIA RTX 6000D (96 GB, PCIe)', vramGb: 96, interconnect: 'pcie' },
   { type: 'MLU590-M9DK', label: 'Cambricon MLU590-M9DK (80 GB, MLUlink)', vramGb: 80, interconnect: 'mlulink' },
   { type: 'CPU', label: 'CPU (no GPU)', vramGb: 0, interconnect: '' },
 ];

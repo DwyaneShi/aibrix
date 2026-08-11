@@ -52,6 +52,14 @@ def get_job_name(job: BatchJob) -> str:
     return f"{_JOB_NAME_PREFIX}-{job_suffix}".lower()
 
 
+def get_workload_name(job_name: str, allocation_index: int) -> str:
+    """Return the stable Octagram workload name for one resource allocation."""
+    if allocation_index == 0:
+        return job_name
+    suffix = f"-allocation-{allocation_index}"
+    return f"{job_name[: _MAX_OCTAGRAM_NAME_LENGTH - len(suffix)]}{suffix}"
+
+
 def get_psm(job: BatchJob) -> Optional[str]:
     """Derive the Octagram PSM from a BatchJob.
 

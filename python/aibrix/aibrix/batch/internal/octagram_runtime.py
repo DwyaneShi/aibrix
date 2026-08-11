@@ -17,18 +17,22 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional, cast
 
 import httpx
 
 import aibrix.batch.constant as constant
 from aibrix import envs
-from aibrix.batch.client import EndpointSource
+from aibrix.batch.client import CapacitySignal, EndpointSource
 from aibrix.batch.client.sources import DiscoveryEndpointSource, GatewayEndpointSource
 from aibrix.batch.internal.config import REGION_DOMAINS
 from aibrix.batch.internal.octagram_renderer import OctagramManifestRenderer
-from aibrix.batch.internal.octagram_utils import get_job_name, parse_endpoint_cluster
+from aibrix.batch.internal.octagram_utils import (
+    get_job_name,
+    get_workload_name,
+    parse_endpoint_cluster,
+)
 from aibrix.batch.job_driver.runtime import (
     RUNTIME_WAIT_MODE_PROVISION,
     RUNTIME_WAIT_MODE_RECONNECT,
@@ -49,7 +53,7 @@ logger = init_logger(__name__)
 
 _DEFAULT_NAMESPACE = "default"
 _MIN_READY_REPLICAS = 1
-_DEFAULT_REQUEST_TIMEOUT_SECONDS = 600.0
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 3600.0
 _MIN_REQUEST_TIMEOUT_SECONDS = 1.0
 _MODEL_DISCOVERY_WAIT_SLICE_SECONDS = 10.0
 _GET_RESPONSE_LOG_SUPPRESSION_MIN_WINDOW_SECONDS = 30.0
@@ -57,6 +61,7 @@ _PSM_SERVICE_IDC_MAX_SPLITS = 1
 _CONSUL_IDC_ALIASES = {
     "aliyun_va": "maliva",
 }
+_ENDPOINT_CAPACITY_POLL_INTERVAL_SECONDS = 1.0
 
 
 @dataclass
@@ -70,6 +75,54 @@ class OctagramHandle:
     replicas: int
     request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS
     source: Optional[EndpointSource] = None
+    supplemental: list["OctagramHandle"] = field(default_factory=list)
+
+
+class _CombinedEndpointSource:
+    def __init__(self, sources: list[DiscoveryEndpointSource]) -> None:
+        self._sources = sources
+
+    async def channels(self) -> list[Any]:
+        channel_groups = await asyncio.gather(
+            *(source.channels() for source in self._sources)
+        )
+        return [channel for group in channel_groups for channel in group]
+
+    async def capacity(self) -> CapacitySignal:
+        signals = await asyncio.gather(
+            *(source.capacity() for source in self._sources)
+        )
+        return CapacitySignal(
+            count=sum(signal.count for signal in signals),
+            version=hash(
+                tuple((signal.count, signal.version) for signal in signals)
+            ),
+        )
+
+    async def wait_capacity_change(
+        self,
+        previous: CapacitySignal,
+    ) -> CapacitySignal:
+        while True:
+            current = await self.capacity()
+            if current != previous:
+                return current
+            await asyncio.sleep(_ENDPOINT_CAPACITY_POLL_INTERVAL_SECONDS)
+
+    async def report_channel_error(
+        self,
+        channel_id: str,
+        error: Exception,
+    ) -> None:
+        await asyncio.gather(
+            *(
+                source.report_channel_error(channel_id, error)
+                for source in self._sources
+            )
+        )
+
+    async def aclose(self) -> None:
+        await asyncio.gather(*(source.aclose() for source in self._sources))
 
 
 class OctagramRuntime(RuntimeBase):
@@ -107,6 +160,58 @@ class OctagramRuntime(RuntimeBase):
             context.template_registry, context.profile_registry
         )
 
+    @staticmethod
+    def _all_workloads(handle: OctagramHandle) -> list[OctagramHandle]:
+        return [handle, *handle.supplemental]
+
+    @staticmethod
+    def _handle_payload(handle: OctagramHandle) -> dict[str, Any]:
+        return {
+            "cluster": handle.cluster,
+            "namespace": handle.namespace,
+            "workloadName": handle.workload_name,
+            "modelName": handle.model_name,
+            "psm": handle.psm,
+            "baseUrl": handle.base_url,
+            "replicas": handle.replicas,
+        }
+
+    @staticmethod
+    def _handle_from_payload(
+        payload: dict[str, Any],
+        request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    ) -> Optional[OctagramHandle]:
+        cluster = payload.get("cluster")
+        namespace = payload.get("namespace")
+        workload_name = payload.get("workloadName")
+        model_name = payload.get("modelName")
+        psm = payload.get("psm")
+        base_url = payload.get("baseUrl")
+        replicas = payload.get("replicas")
+        if not (
+            isinstance(cluster, str)
+            and isinstance(namespace, str)
+            and namespace
+            and isinstance(workload_name, str)
+            and workload_name
+            and isinstance(model_name, str)
+            and model_name
+            and (psm is None or isinstance(psm, str))
+            and (base_url is None or isinstance(base_url, str))
+            and isinstance(replicas, int)
+        ):
+            return None
+        return OctagramHandle(
+            cluster=cluster,
+            namespace=namespace,
+            workload_name=workload_name,
+            model_name=model_name,
+            psm=psm,
+            base_url=base_url,
+            replicas=replicas,
+            request_timeout_seconds=request_timeout_seconds,
+        )
+
     def _get_runtime_key(self, job: BatchJob) -> str:
         del job
         return "tce"
@@ -127,54 +232,43 @@ class OctagramRuntime(RuntimeBase):
         payload = super()._get_runtime_reconnect_payload(job) or {}
         if self._active_handle is None:
             return None if not payload else payload
-        payload.update(
-            {
-                "cluster": self._active_handle.cluster,
-                "namespace": self._active_handle.namespace,
-                "workloadName": self._active_handle.workload_name,
-                "modelName": self._active_handle.model_name,
-                "psm": self._active_handle.psm,
-                "baseUrl": self._active_handle.base_url,
-                "replicas": self._active_handle.replicas,
-            }
-        )
+        # Keep the primary handle in the legacy top-level shape. Older MDS
+        # versions ignore supplementalWorkloads but can still deserialize and
+        # reconnect the primary workload after a binary rollback.
+        payload.update(self._handle_payload(self._active_handle))
+        if self._active_handle.supplemental:
+            payload["supplementalWorkloads"] = [
+                self._handle_payload(handle)
+                for handle in self._active_handle.supplemental
+            ]
         return payload
 
     async def _load_handle(
         self, job: BatchJob, job_id: str, execution: JobRuntimeRef
     ) -> OctagramHandle | None:
         reconnect_payload = execution.reconnect_payload or {}
-        cluster = reconnect_payload.get("cluster")
-        namespace = reconnect_payload.get("namespace")
-        workload_name = reconnect_payload.get("workloadName")
-        model_name = reconnect_payload.get("modelName")
-        psm = reconnect_payload.get("psm")
-        base_url = reconnect_payload.get("baseUrl")
-        replicas = reconnect_payload.get("replicas")
-        if not (
-            isinstance(cluster, str)
-            and isinstance(namespace, str)
-            and namespace
-            and isinstance(workload_name, str)
-            and workload_name
-            and isinstance(model_name, str)
-            and model_name
-            and (psm is None or isinstance(psm, str))
-            and (base_url is None or isinstance(base_url, str))
-            and isinstance(replicas, int)
-        ):
+        request_timeout_seconds = self._resolve_request_timeout_seconds(job)
+        handle = self._handle_from_payload(
+            reconnect_payload,
+            request_timeout_seconds=request_timeout_seconds,
+        )
+        if handle is None:
             return None
 
-        handle = OctagramHandle(
-            cluster=cluster,
-            namespace=namespace,
-            workload_name=workload_name,
-            model_name=model_name,
-            psm=psm,
-            base_url=base_url,
-            replicas=replicas,
-            request_timeout_seconds=self._resolve_request_timeout_seconds(job),
-        )
+        supplemental_payloads = reconnect_payload.get("supplementalWorkloads", [])
+        if not isinstance(supplemental_payloads, list):
+            return None
+        for payload in supplemental_payloads:
+            if not isinstance(payload, dict):
+                return None
+            supplemental = self._handle_from_payload(
+                payload,
+                request_timeout_seconds=request_timeout_seconds,
+            )
+            if supplemental is None:
+                return None
+            handle.supplemental.append(supplemental)
+
         self._active_handle = handle
         logger.info(
             "Loaded Octagram runtime handle for batch job",
@@ -182,6 +276,9 @@ class OctagramRuntime(RuntimeBase):
             cluster=handle.cluster,
             namespace=handle.namespace,
             workload=handle.workload_name,
+            supplemental_workloads=[
+                supplemental.workload_name for supplemental in handle.supplemental
+            ],
         )  # type: ignore[call-arg]
         return handle
 
@@ -199,8 +296,115 @@ class OctagramRuntime(RuntimeBase):
             raise ValueError(
                 "OctagramRuntime requires aibrix.resource_allocation.resource_details"
             )
+        if len(resource_details) == 1:
+            return await self._provision_single(job, job_id, resource_details[0])
 
-        resource_detail = resource_details[0]
+        job_name = get_job_name(job)
+        direct_base_url = self._resolve_direct_base_url(job)
+        if direct_base_url is not None:
+            raise ValueError(
+                "OctagramRuntime cannot combine multiple allocations with a direct endpoint"
+            )
+
+        rendered_workloads: list[tuple[OctagramHandle, dict[str, Any], Any]] = []
+        primary_handle: Optional[OctagramHandle] = None
+        served_model_name: Optional[str] = None
+        request_timeout_seconds = self._resolve_request_timeout_seconds(job)
+        for index, resource_detail in enumerate(resource_details):
+            workload_job_name = get_workload_name(job_name, index)
+            workload = self._renderer.render(
+                job.job_id,
+                workload_job_name,
+                job.spec,
+                resource_detail,
+                served_model_name=served_model_name,
+            )
+            _, idc, physical_cluster, _ = parse_endpoint_cluster(
+                resource_detail.endpoint_cluster
+            )
+            cluster = f"{physical_cluster}-{idc}"
+            namespace = workload["metadata"].get("namespace", _DEFAULT_NAMESPACE)
+            workload_name = workload["metadata"]["name"]
+            model_name = workload["metadata"]["labels"]["model.aibrix.ai/name"]
+            handle = OctagramHandle(
+                cluster=cluster,
+                namespace=namespace,
+                workload_name=workload_name,
+                model_name=model_name,
+                psm=(
+                    self._resolve_psm(workload)
+                    if index == 0
+                    else self._resolve_psm(workload, idc)
+                ),
+                base_url=direct_base_url if index == 0 else None,
+                replicas=int(
+                    workload["spec"]["deployStrategy"].get("replicas", 1)
+                ),
+                request_timeout_seconds=request_timeout_seconds,
+            )
+            if primary_handle is None:
+                primary_handle = handle
+                served_model_name = model_name
+            else:
+                primary_handle.supplemental.append(handle)
+            rendered_workloads.append((handle, workload, resource_detail))
+
+        assert primary_handle is not None
+
+        if self._renderer.template is not None:
+            self._ready_timeout_seconds = (
+                self._renderer.template.spec.engine.ready_timeout_seconds
+            )
+            logger.debug(
+                "ready_timeout_seconds override from template",
+                job_id=job.job_id,
+                ready_timeout_seconds=self._ready_timeout_seconds,
+            )  # type: ignore[call-arg]
+
+        self._active_handle = primary_handle
+        applied_workloads: list[OctagramHandle] = []
+        try:
+            for handle, workload, resource_detail in rendered_workloads:
+                await self._apply_workload(
+                    handle.cluster,
+                    handle.namespace,
+                    workload,
+                )
+                applied_workloads.append(handle)
+                logger.info(
+                    "Provisioned Octagram workload for batch job",
+                    job_id=job_id,
+                    cluster=handle.cluster,
+                    namespace=handle.namespace,
+                    workload=handle.workload_name,
+                    model_name=handle.model_name,
+                    psm=handle.psm,
+                    replicas=handle.replicas,
+                    resource_pool_name=resource_detail.resource_pool_name,
+                )  # type: ignore[call-arg]
+        except BaseException:
+            for applied in reversed(applied_workloads):
+                try:
+                    await self._delete_workload(applied)
+                except BaseException as cleanup_error:
+                    logger.warning(
+                        "Failed to roll back partially provisioned Octagram workload",
+                        job_id=job_id,
+                        cluster=applied.cluster,
+                        namespace=applied.namespace,
+                        workload=applied.workload_name,
+                        error=str(cleanup_error),
+                    )  # type: ignore[call-arg]
+            self._active_handle = None
+            raise
+        return primary_handle
+
+    async def _provision_single(
+        self,
+        job: BatchJob,
+        job_id: str,
+        resource_detail: Any,
+    ) -> OctagramHandle:
         job_name = get_job_name(job)
         workload = self._renderer.render(
             job.job_id, job_name, job.spec, resource_detail
@@ -254,26 +458,64 @@ class OctagramRuntime(RuntimeBase):
         handle: OctagramHandle,
         wait_mode: str = RUNTIME_WAIT_MODE_PROVISION,
     ) -> None:
-        await self._wait_for_workload(
-            cluster=handle.cluster,
-            namespace=handle.namespace,
-            workload_name=handle.workload_name,
-            replicas=handle.replicas,
-            wait_mode=wait_mode,
+        if not handle.supplemental:
+            await self._wait_for_workload(
+                cluster=handle.cluster,
+                namespace=handle.namespace,
+                workload_name=handle.workload_name,
+                replicas=handle.replicas,
+                wait_mode=wait_mode,
+            )
+            if handle.base_url is None:
+                await self._wait_for_model_discoverable(handle)
+            return
+
+        await asyncio.gather(
+            *(
+                self._wait_for_workload(
+                    cluster=workload.cluster,
+                    namespace=workload.namespace,
+                    workload_name=workload.workload_name,
+                    replicas=workload.replicas,
+                    wait_mode=wait_mode,
+                )
+                for workload in self._all_workloads(handle)
+            )
         )
         if handle.base_url is None:
-            await self._wait_for_model_discoverable(handle)
+            await asyncio.gather(
+                *(
+                    self._wait_for_model_discoverable(workload)
+                    for workload in self._all_workloads(handle)
+                )
+            )
 
     async def _check_liveness(
         self, handle: OctagramHandle, reason: str = "unspecified"
     ) -> None:
-        await self._wait_for_workload(
-            cluster=handle.cluster,
-            namespace=handle.namespace,
-            workload_name=handle.workload_name,
-            replicas=handle.replicas,
-            wait_mode=RUNTIME_WAIT_MODE_RECONNECT,
-            request_reason=f"check_liveness:{reason}",
+        if not handle.supplemental:
+            await self._wait_for_workload(
+                cluster=handle.cluster,
+                namespace=handle.namespace,
+                workload_name=handle.workload_name,
+                replicas=handle.replicas,
+                wait_mode=RUNTIME_WAIT_MODE_RECONNECT,
+                request_reason=f"check_liveness:{reason}",
+            )
+            return
+
+        await asyncio.gather(
+            *(
+                self._wait_for_workload(
+                    cluster=workload.cluster,
+                    namespace=workload.namespace,
+                    workload_name=workload.workload_name,
+                    replicas=workload.replicas,
+                    wait_mode=RUNTIME_WAIT_MODE_RECONNECT,
+                    request_reason=f"check_liveness:{reason}",
+                )
+                for workload in self._all_workloads(handle)
+            )
         )
 
     async def _connect(self, handle: OctagramHandle) -> Endpoint:
@@ -290,11 +532,37 @@ class OctagramRuntime(RuntimeBase):
                     code=BatchJobErrorCode.RESOURCE_CREATION_ERROR,
                     message="Octagram consul discovery service is not configured",
                 )
-            handle.source = DiscoveryEndpointSource(
-                model_discovery,
-                handle.model_name,
-                service_id=handle.psm,
-                timeout=handle.request_timeout_seconds,
+            if not handle.supplemental:
+                handle.source = DiscoveryEndpointSource(
+                    model_discovery,
+                    handle.model_name,
+                    service_id=handle.psm,
+                    timeout=handle.request_timeout_seconds,
+                )
+                return Endpoint(
+                    source=cast(Optional[EndpointSource], handle.source),
+                    model_name=handle.model_name,
+                )
+
+            discovery_sources: list[DiscoveryEndpointSource] = []
+            seen_discovery_keys: set[tuple[str, Optional[str]]] = set()
+            for workload in self._all_workloads(handle):
+                discovery_key = (workload.model_name, workload.psm)
+                if discovery_key in seen_discovery_keys:
+                    continue
+                seen_discovery_keys.add(discovery_key)
+                discovery_sources.append(
+                    DiscoveryEndpointSource(
+                        model_discovery,
+                        workload.model_name,
+                        service_id=workload.psm,
+                        timeout=workload.request_timeout_seconds,
+                    )
+                )
+            handle.source = (
+                discovery_sources[0]
+                if len(discovery_sources) == 1
+                else _CombinedEndpointSource(discovery_sources)
             )
         return Endpoint(
             source=cast(Optional[EndpointSource], handle.source),
@@ -302,13 +570,41 @@ class OctagramRuntime(RuntimeBase):
         )
 
     async def _teardown(self, handle: Optional[OctagramHandle]) -> None:
-        if handle is not None:
+        if handle is not None and not handle.supplemental:
             try:
                 await self._delete_workload(handle)
             finally:
                 if handle.source is not None:
                     await handle.source.aclose()
-        self._active_handle = None
+            self._active_handle = None
+            return
+
+        if handle is None:
+            self._active_handle = None
+            return
+
+        teardown_error: Optional[BaseException] = None
+        try:
+            for workload in reversed(self._all_workloads(handle)):
+                try:
+                    await self._delete_workload(workload)
+                except BaseException as ex:
+                    if teardown_error is None:
+                        teardown_error = ex
+                    logger.warning(
+                        "Octagram workload teardown failed; continuing cleanup",
+                        job_id=self._active_job_id,
+                        cluster=workload.cluster,
+                        namespace=workload.namespace,
+                        workload=workload.workload_name,
+                        error=str(ex),
+                    )  # type: ignore[call-arg]
+        finally:
+            if handle.source is not None:
+                await handle.source.aclose()
+            self._active_handle = None
+        if teardown_error is not None:
+            raise teardown_error
 
     async def _wait_for_model_discoverable(self, handle: OctagramHandle) -> None:
         model_discovery = self._context.model_discovery
@@ -395,13 +691,22 @@ class OctagramRuntime(RuntimeBase):
             )  # type: ignore[call-arg]
             return _DEFAULT_REQUEST_TIMEOUT_SECONDS
 
-    def _resolve_psm(self, workload: dict[str, Any]) -> Optional[str]:
+    def _resolve_psm(
+        self,
+        workload: dict[str, Any],
+        idc_name: Optional[str] = None,
+    ) -> Optional[str]:
         labels = workload["metadata"].get("labels", {})
         psm = labels.get("psm")
         if not psm:
             return None
-        idc_name = getattr(self._renderer, "idc_name", "")
-        return self._normalize_psm_service_idc(psm, idc_name)
+        return self._normalize_psm_service_idc(
+            psm,
+            idc_name
+            if idc_name is not None
+            else getattr(self._renderer, "idc_name", ""),
+            replace_existing=idc_name is not None,
+        )
 
     def _normalize_consul_idc_name(self, idc_name: str) -> str:
         normalized = idc_name.lower()
@@ -413,10 +718,18 @@ class OctagramRuntime(RuntimeBase):
                 return f"{target}.{normalized[len(prefix) :]}"
         return normalized
 
-    def _normalize_psm_service_idc(self, psm: str, idc_name: str) -> str:
+    def _normalize_psm_service_idc(
+        self,
+        psm: str,
+        idc_name: str,
+        *,
+        replace_existing: bool = False,
+    ) -> str:
         if ".service." in psm:
             prefix, existing_idc = psm.rsplit(".service.", _PSM_SERVICE_IDC_MAX_SPLITS)
-            normalized_idc = self._normalize_consul_idc_name(existing_idc)
+            normalized_idc = self._normalize_consul_idc_name(
+                idc_name if replace_existing and idc_name else existing_idc
+            )
             return f"{prefix}.service.{normalized_idc}"
 
         normalized_idc = self._normalize_consul_idc_name(idc_name)

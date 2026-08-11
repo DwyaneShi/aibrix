@@ -419,7 +419,7 @@ class SchedulingSpec(_Strict):
     allow_preempt: bool = Field(default=False)
     allow_spot: bool = Field(default=False)
     max_concurrency: int = Field(default=256, ge=1)
-    request_timeout_seconds: int = Field(default=600, ge=1)
+    request_timeout_seconds: int = Field(default=3600, ge=1)
     retry_policy: Optional[RetryPolicy] = None
 
 

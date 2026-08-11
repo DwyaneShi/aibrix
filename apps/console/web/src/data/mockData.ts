@@ -105,6 +105,7 @@ export interface JobDeploymentWorkload {
   };
   replicas?: number;
   image?: string;
+  queue_name?: string;
   healthy?: boolean;
   pods?: JobDeploymentPod[];
   yaml?: string;

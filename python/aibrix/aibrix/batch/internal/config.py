@@ -63,6 +63,7 @@ _GPU_TYPE_ALIASES: dict[str, str] = {}
 # Per-GPU resource specs
 _GPU_SPECS: dict[str, GpuSpec] = {
     "A100": GpuSpec(cpu_per_gpu=15750, mem_per_gpu=251),
+    "RTX-6000D": GpuSpec(cpu_per_gpu=14000, mem_per_gpu=88),
 }
 
 _DEFAULT_CPU_MILLICORES_PER_GPU = 16000

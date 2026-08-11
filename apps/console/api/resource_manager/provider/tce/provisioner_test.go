@@ -196,6 +196,32 @@ func TestTCEProvisioner_ProvisionListRelease(t *testing.T) {
 	assert.Equal(t, types.ProvisionStatusReleased, storedResult.Status)
 }
 
+func TestBuildMatchingGroupsPreservesRTX6000DResources(t *testing.T) {
+	cpuCores := 28
+	preferredTypes := []string{"NVIDIA-RTX-6000D"}
+	groups := []types.ResourceGroupSpec{
+		{
+			GpusPerReplica:     2,
+			Replicas:           utils.ToPtr(3),
+			CpuCoresPerReplica: &cpuCores,
+			AcceleratorPreference: &types.AcceleratorPreference{
+				PreferredTypes: &preferredTypes,
+			},
+		},
+	}
+
+	matchingGroups, err := buildMatchingGroups(&groups)
+	require.NoError(t, err)
+	require.NotNil(t, matchingGroups)
+	require.Len(t, *matchingGroups, 1)
+
+	group := (*matchingGroups)[0]
+	require.NotNil(t, group.CpuCores)
+	assert.Equal(t, 28, *group.CpuCores)
+	require.NotNil(t, group.AcceleratorPreference.PreferredTypes)
+	assert.Equal(t, []string{"NVIDIA-RTX-6000D"}, *group.AcceleratorPreference.PreferredTypes)
+}
+
 func TestTCEProvisioner_ProvisionFailed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

@@ -277,6 +277,11 @@ function WorkloadSection({
                 {toPascalCase(workload.sale_mode)}
               </span>
             )}
+            {workload.queue_name && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                {workload.queue_name}
+              </span>
+            )}
             {workload.role && workload.role !== 'default' && (
               <span className="text-xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-600">
                 {workload.role}
