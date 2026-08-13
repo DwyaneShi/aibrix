@@ -323,6 +323,7 @@ func (p *tceProvisioner) List(ctx context.Context, opts *types.ListOptions) ([]*
 		}
 
 		if upsertProvision {
+			result.UpdatedAt = time.Now().UTC()
 			if err := p.store.UpsertProvision(ctx, result); err != nil {
 				klog.Errorf("update provision failed, provision %s, matchId %s: %v, will try again in next list", result.ProvisionID, result.TCE.MatchId, err)
 			} else {

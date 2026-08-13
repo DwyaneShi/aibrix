@@ -118,6 +118,7 @@ func TestTCEProvisioner_ProvisionListRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, storedResult)
 	assert.Equal(t, types.ProvisionStatusProvisioning, storedResult.Status)
+	initialUpdatedAt := storedResult.UpdatedAt
 
 	// Setup mock for GetScheduledMatch - simulate provisioning to success
 	// First two calls return booking, third returns success
@@ -178,6 +179,8 @@ func TestTCEProvisioner_ProvisionListRelease(t *testing.T) {
 	storedResult, err = s.GetProvision(ctx, provisionID)
 	require.NoError(t, err)
 	assert.Equal(t, types.ProvisionStatusRunning, storedResult.Status)
+	assert.True(t, storedResult.UpdatedAt.After(initialUpdatedAt),
+		"UpdatedAt should advance when the provision changes status")
 
 	// Setup mock for CancelScheduledMatch
 	mockRMClient.EXPECT().CancelScheduledMatch(gomock.Any(), matchId).

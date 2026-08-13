@@ -44,10 +44,7 @@ func NewByteRDSStore(dsn, encryptionKey string, injector error_injection.Injecto
 	// parse addr, which is in the format of "psm:port"
 	addr := strings.Split(cfg.Addr, ":")
 	psm := addr[0]
-	dsnParams := url.Values{}
-	for k, v := range cfg.Params {
-		dsnParams.Set(k, v)
-	}
+	dsnParams := byteRDSDSNParams(cfg)
 
 	cluster := dsnParams.Get("cluster")
 	dsnParams.Del("cluster")
@@ -117,4 +114,16 @@ func NewByteRDSStore(dsn, encryptionKey string, injector error_injection.Injecto
 
 	// ByteRDS does not support migrations, so we skip it
 	return s, nil
+}
+
+// byteRDSDSNParams rebuilds the query parameters consumed by bytedgorm.
+// ParseDSN lifts parseTime and loc out of cfg.Params into typed fields, so they
+// must be pinned again when the DSN is reconstructed.
+func byteRDSDSNParams(cfg *mysql.Config) url.Values {
+	params := url.Values{}
+	for k, v := range cfg.Params {
+		params.Set(k, v)
+	}
+	pinUTCParams(params)
+	return params
 }
