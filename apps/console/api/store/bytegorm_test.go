@@ -33,6 +33,7 @@ func TestByteRDSDSNParamsRepinUTCFieldsRemovedByParseDSN(t *testing.T) {
 		"cluster":   "lf",
 		"loc":       "UTC",
 		"parseTime": "true",
+		"time_zone": "'+00:00'",
 	} {
 		if got := params.Get(key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)

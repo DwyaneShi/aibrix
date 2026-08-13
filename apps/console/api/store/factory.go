@@ -101,8 +101,11 @@ func mysqlURIToDSN(u *url.URL) string {
 	return dsn + "?" + params.Encode()
 }
 
-// pinUTCParams fixes the zone the driver uses to convert TIMESTAMP values.
+// pinUTCParams fixes the zones both MySQL and the driver use to convert
+// TIMESTAMP values. The quotes in time_zone are required by go-sql-driver,
+// which uses DSN system variables to issue SET time_zone = '+00:00'.
 func pinUTCParams(params url.Values) {
 	params.Set("parseTime", "true")
 	params.Set("loc", "UTC")
+	params.Set("time_zone", "'+00:00'")
 }
