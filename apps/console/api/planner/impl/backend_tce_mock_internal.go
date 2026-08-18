@@ -86,8 +86,8 @@ func (b *tceMockBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionS
 		applyTCEDemoOverrides(&allocation.ResourceDetails[0], &resource, replicas)
 		allocation.ResourceDetails[0].Resources = []plannerclient.ResourceItem{resource}
 	}
-	if spec.TimeWindow != nil && spec.TimeWindow.EndTime != nil {
-		allocation.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
+	if timeWindow := b.AllocationTimeWindow(prov); timeWindow != nil && timeWindow.EndTime != nil {
+		allocation.ProvisionResourceDeadline = timeWindow.EndTime.Unix()
 	}
 	return allocation
 }

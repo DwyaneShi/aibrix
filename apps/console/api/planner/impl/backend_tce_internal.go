@@ -32,6 +32,7 @@ import (
 	plannerclient "github.com/vllm-project/aibrix/apps/console/api/planner/client"
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provisioner"
 	rmtypes "github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
+	"github.com/vllm-project/aibrix/apps/console/api/utils"
 )
 
 var tceMatchingAcceleratorTypeAliases = map[string]string{
@@ -80,7 +81,7 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 	startTime := time.Now().UTC().Add(5 * time.Minute)
 	if req.BatchParams.CompletionWindow != "" {
 		// Update time window if it's valid and greater than default time window
-		if completionWindow, err := time.ParseDuration(string(req.BatchParams.CompletionWindow)); err == nil && completionWindow > timeWindow {
+		if completionWindow, err := utils.ParseCompletionWindow(string(req.BatchParams.CompletionWindow)); err == nil && completionWindow > timeWindow {
 			timeWindow = completionWindow
 		}
 	}
@@ -137,10 +138,44 @@ func (b *tcePlannerBackend) logProvisionReady(prov *rmtypes.ProvisionResult) {
 func (b *tcePlannerBackend) BuildResourceAllocation(spec rmtypes.ResourceProvisionSpec, prov *rmtypes.ProvisionResult) plannerclient.ResourceAllocation {
 	b.logProvisionReady(prov)
 	allocation := buildTCEResourceAllocation(prov, replicasFromProvisionSpec(spec))
-	if spec.TimeWindow != nil && spec.TimeWindow.EndTime != nil {
-		allocation.ProvisionResourceDeadline = spec.TimeWindow.EndTime.Unix()
+	if timeWindow := b.AllocationTimeWindow(prov); timeWindow != nil && timeWindow.EndTime != nil {
+		allocation.ProvisionResourceDeadline = timeWindow.EndTime.Unix()
 	}
 	return allocation
+}
+
+func (b *tcePlannerBackend) AllocationTimeWindow(prov *rmtypes.ProvisionResult) *rmtypes.TimeWindow {
+	if prov == nil || prov.TCE == nil || prov.TCE.GroupResults == nil {
+		return nil
+	}
+
+	var (
+		startTime time.Time
+		endTime   *time.Time
+	)
+	for _, group := range *prov.TCE.GroupResults {
+		for _, segment := range group.AllocationSegments {
+			if !segment.Allocated {
+				continue
+			}
+			window := segment.TimeWindow
+			if window.StartTime.After(startTime) {
+				startTime = window.StartTime
+			}
+			if window.EndTime != nil &&
+				(endTime == nil || window.EndTime.Before(*endTime)) {
+				segmentEndTime := *window.EndTime
+				endTime = &segmentEndTime
+			}
+		}
+	}
+	if startTime.IsZero() && endTime == nil {
+		return nil
+	}
+	return &rmtypes.TimeWindow{
+		StartTime: startTime,
+		EndTime:   endTime,
+	}
 }
 
 func (b *tcePlannerBackend) BuildRuntime(req *plannerapi.EnqueueRequest, prov *rmtypes.ProvisionResult) (*plannerapi.RuntimeRef, error) {
