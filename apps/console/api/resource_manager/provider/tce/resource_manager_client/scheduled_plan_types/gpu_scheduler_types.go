@@ -72,6 +72,14 @@ const (
 	GroupSpecNetworkRdmaRoce       GroupSpecNetworkRdma = "roce"
 )
 
+// Defines values for GroupSpecTopologyConstraintExpressionsOperator.
+const (
+	DoesNotExist GroupSpecTopologyConstraintExpressionsOperator = "DoesNotExist"
+	Exists       GroupSpecTopologyConstraintExpressionsOperator = "Exists"
+	In           GroupSpecTopologyConstraintExpressionsOperator = "In"
+	NotIn        GroupSpecTopologyConstraintExpressionsOperator = "NotIn"
+)
+
 // Defines values for MatchingIntentStatus.
 const (
 	MatchingIntentStatusCanceled            MatchingIntentStatus = "Canceled"
@@ -693,6 +701,9 @@ type GroupSpec struct {
 	// tce.kubernetes.io/rdmaminipod=zz，拓扑撮合时便会去预留满足这些拓扑条件的节点。
 	TopologyConstraint *map[string]string `json:"topologyConstraint,omitempty"`
 
+	// TopologyConstraintExpressions 仿照 K8s LabelSelectorRequirement 表达非等值拓扑条件。
+	TopologyConstraintExpressions *[]GroupSpecTopologyConstraintExpression `json:"topologyConstraintExpressions,omitempty"`
+
 	// VolcConfig 针对 ToB 业务的特殊配置字段，如vendor, region, az等。
 	// 建议仅在 ToB 业务中使用。
 	VolcConfig *VolcConfig `json:"volcConfig,omitempty"`
@@ -732,6 +743,9 @@ type GroupSpecCommitExtraFields struct {
 	// bernard: bernard_to_uce
 	// arnold: arnold_to_uce
 	ReserveTo *string `json:"reserveTo,omitempty"`
+
+	// ReserveNodes 控制 reservation 侧是否以整机维度进行预留。
+	ReserveNodes *bool `json:"reserveNodes,omitempty"`
 }
 
 type GroupSpecElasticity struct {
@@ -791,6 +805,14 @@ type GroupSpecNetworkStorageConnectivity struct {
 // - roce: 必须是 RoCE 网络
 // - iwarp: 必须是 iWARP 网络
 type GroupSpecNetworkRdma string
+
+type GroupSpecTopologyConstraintExpression struct {
+	Key      string                                         `json:"key"`
+	Operator GroupSpecTopologyConstraintExpressionsOperator `json:"operator"`
+	Values   *[]string                                      `json:"values,omitempty"`
+}
+
+type GroupSpecTopologyConstraintExpressionsOperator string
 
 // LocationAffinity 区域/集群等资源的约束集合，三类数组表达 required/preferred/forbidden。
 // - required：必须调度到的资源（硬约束，缺一不可）

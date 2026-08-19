@@ -15,7 +15,10 @@ limitations under the License.
 */
 package http
 
+import "context"
+
 type Request struct {
+	ctx         context.Context
 	method      string
 	url         string
 	body        interface{}
@@ -45,6 +48,7 @@ func NewDelete(url string) *Request {
 
 func newRequest(method, url string) *Request {
 	return &Request{
+		ctx:         context.Background(),
 		method:      method,
 		url:         url,
 		body:        nil,
@@ -55,6 +59,14 @@ func newRequest(method, url string) *Request {
 
 func (r *Request) WithBody(body interface{}) *Request {
 	r.body = body
+	return r
+}
+
+func (r *Request) WithContext(ctx context.Context) *Request {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.ctx = ctx
 	return r
 }
 
@@ -70,6 +82,13 @@ func (r *Request) WithHeaders(headers map[string]string) *Request {
 
 func (r *Request) Method() string {
 	return r.method
+}
+
+func (r *Request) Context() context.Context {
+	if r.ctx == nil {
+		return context.Background()
+	}
+	return r.ctx
 }
 
 func (r *Request) Url() string {

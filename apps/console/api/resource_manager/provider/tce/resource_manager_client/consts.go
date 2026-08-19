@@ -17,5 +17,6 @@ limitations under the License.
 package resource_manager_client
 
 const (
-	HeaderKeyJWTToken = "X-JWT-TOKEN"
+	HeaderKeyJWTToken       = "X-JWT-TOKEN"
+	HeaderKeyIdempotencyKey = "idempotency-key"
 )

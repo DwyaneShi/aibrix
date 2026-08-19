@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -477,6 +478,18 @@ func buildMatchingGroups(groups *[]types.ResourceGroupSpec) (*[]scheduled_plan_t
 		if group.TCE.TopologyConstraint != nil {
 			matchingGroup.TopologyConstraint = group.TCE.TopologyConstraint
 		}
+		if group.TCE.TopologyConstraintExpressions != nil {
+			expressions, err := toMatchingTopologyConstraintExpressions(group.TCE.TopologyConstraintExpressions)
+			if err != nil {
+				return nil, err
+			}
+			matchingGroup.TopologyConstraintExpressions = expressions
+		}
+		if group.TCE.ReserveNodes != nil {
+			matchingGroup.CommitExtraFields = &scheduled_plan_types.GroupSpecCommitExtraFields{
+				ReserveNodes: group.TCE.ReserveNodes,
+			}
+		}
 		if group.TCE.NumaConfig != nil {
 			matchingGroup.NumaConfig = &scheduled_plan_types.NUMAConfig{
 				CpuPinning:                group.TCE.NumaConfig.CpuPinning,
@@ -492,6 +505,56 @@ func buildMatchingGroups(groups *[]types.ResourceGroupSpec) (*[]scheduled_plan_t
 	}
 
 	return &matchingGroups, nil
+}
+
+func toMatchingTopologyConstraintExpressions(selectors *[]types.Selector) (*[]scheduled_plan_types.GroupSpecTopologyConstraintExpression, error) {
+	if selectors == nil {
+		return nil, nil
+	}
+
+	expressions := make([]scheduled_plan_types.GroupSpecTopologyConstraintExpression, 0, len(*selectors))
+	for index, selector := range *selectors {
+		if strings.TrimSpace(selector.Key) == "" {
+			return nil, fmt.Errorf("topology constraint expression %d key is required", index)
+		}
+
+		var operator scheduled_plan_types.GroupSpecTopologyConstraintExpressionsOperator
+		switch selector.Operator {
+		case string(scheduled_plan_types.In):
+			operator = scheduled_plan_types.In
+			if len(selector.Values) == 0 {
+				return nil, fmt.Errorf("topology constraint expression %d values must not be empty for operator %s", index, selector.Operator)
+			}
+		case string(scheduled_plan_types.NotIn):
+			operator = scheduled_plan_types.NotIn
+			if len(selector.Values) == 0 {
+				return nil, fmt.Errorf("topology constraint expression %d values must not be empty for operator %s", index, selector.Operator)
+			}
+		case string(scheduled_plan_types.Exists):
+			operator = scheduled_plan_types.Exists
+			if len(selector.Values) != 0 {
+				return nil, fmt.Errorf("topology constraint expression %d values must be empty for operator %s", index, selector.Operator)
+			}
+		case string(scheduled_plan_types.DoesNotExist):
+			operator = scheduled_plan_types.DoesNotExist
+			if len(selector.Values) != 0 {
+				return nil, fmt.Errorf("topology constraint expression %d values must be empty for operator %s", index, selector.Operator)
+			}
+		default:
+			return nil, fmt.Errorf("unsupported topology constraint operator: %s", selector.Operator)
+		}
+
+		expression := scheduled_plan_types.GroupSpecTopologyConstraintExpression{
+			Key:      selector.Key,
+			Operator: operator,
+		}
+		if len(selector.Values) > 0 {
+			values := append([]string(nil), selector.Values...)
+			expression.Values = &values
+		}
+		expressions = append(expressions, expression)
+	}
+	return &expressions, nil
 }
 
 func toMatchingAcceleratorPreference(pref *types.AcceleratorPreference) scheduled_plan_types.AcceleratorPreference {

@@ -38,6 +38,12 @@ type TCEGroupOptions struct {
 
 	// TopologyConstraint is optional. It can be used to apply specific topology constraints.
 	TopologyConstraint *map[string]string `json:"topologyConstraint,omitempty"`
+
+	// TopologyConstraintExpressions supports In, NotIn, Exists and DoesNotExist constraints.
+	TopologyConstraintExpressions *[]Selector `json:"topologyConstraintExpressions,omitempty"`
+
+	// ReserveNodes controls whether Resource Market reserves whole nodes.
+	ReserveNodes *bool `json:"reserveNodes,omitempty"`
 }
 
 // Only used for extending the custom provision result details.

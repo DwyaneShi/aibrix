@@ -50,8 +50,8 @@ func NewClientImpl(api string, jwtHelper jwt.JwtHelper) *ClientImpl {
 	}
 }
 
-func (impl ClientImpl) getHeaders() (map[string]string, error) {
-	platformJwtToken, err := impl.jwtHelper.GenJwtToken(context.Background())
+func (impl ClientImpl) getHeaders(ctx context.Context) (map[string]string, error) {
+	platformJwtToken, err := impl.jwtHelper.GenJwtToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -69,12 +69,15 @@ func (impl ClientImpl) getFullUrlPath(path string) string {
 	return fmt.Sprintf("%s%s", impl.api, path)
 }
 
-func (impl *ClientImpl) sendRequest(req *http.Request) ([]byte, error) {
-	headers, err := impl.getHeaders()
+func (impl *ClientImpl) sendRequest(ctx context.Context, req *http.Request) ([]byte, error) {
+	headers, err := impl.getHeaders(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get request headers failed: %w", err)
 	}
-	resp, err := impl.httpClient.SendRequest(req.WithHeaders(headers))
+	for key, value := range req.Headers() {
+		headers[key] = value
+	}
+	resp, err := impl.httpClient.SendRequest(req.WithContext(ctx).WithHeaders(headers))
 	if err != nil {
 		return nil, fmt.Errorf("send request failed: %w", err)
 	}
@@ -86,7 +89,7 @@ func (impl ClientImpl) GetQuotaView(ctx context.Context, query *scheduled_plan_t
 	if query != nil {
 		req = req.WithQueryParam(query.GetParams())
 	}
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +113,7 @@ func (impl ClientImpl) GetQuotaView(ctx context.Context, query *scheduled_plan_t
 
 func (impl ClientImpl) GetScheduledMatch(ctx context.Context, id string) (*scheduled_plan_types.MatchingResult, error) {
 	req := http.NewGet(impl.getFullUrlPath(fmt.Sprintf("/resource_manager/matching_api/v1/match/%s", id)))
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +137,7 @@ func (impl ClientImpl) GetScheduledMatch(ctx context.Context, id string) (*sched
 
 func (impl ClientImpl) GetScheduledMatchDetail(ctx context.Context, id string) (*scheduled_plan_types.MatchingDetailResponse, error) {
 	req := http.NewGet(impl.getFullUrlPath(fmt.Sprintf("/resource_manager/matching_api/v1/match/%s/detail", id)))
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +161,7 @@ func (impl ClientImpl) GetScheduledMatchDetail(ctx context.Context, id string) (
 
 func (impl ClientImpl) CancelScheduledMatch(ctx context.Context, id string) (*scheduled_plan_types.MatchingResult, error) {
 	req := http.NewPost(impl.getFullUrlPath(fmt.Sprintf("/resource_manager/matching_api/v1/match/%s/cancel", id)))
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +188,7 @@ func (impl ClientImpl) ListScheduledMatch(ctx context.Context, query *scheduled_
 	if query != nil {
 		req = req.WithQueryParam(query.GetParams())
 	}
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +215,7 @@ func (impl ClientImpl) GetStatistics(ctx context.Context, query *scheduled_plan_
 	if query != nil {
 		req = req.WithQueryParam(query.GetParams())
 	}
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +239,7 @@ func (impl ClientImpl) GetStatistics(ctx context.Context, query *scheduled_plan_
 
 func (impl ClientImpl) ListFilterOptions(ctx context.Context) (*scheduled_plan_types.ListFilterOptionsResponse, error) {
 	req := http.NewGet(impl.getFullUrlPath("/resource_manager/matching_api/v1/match/filter_options"))
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -276,8 +279,12 @@ func (impl ClientImpl) CreateScheduledMatch(ctx context.Context, query *schedule
 		return nil, fmt.Errorf("CreateScheduledMatch failed: %w", err)
 	}
 
-	req := http.NewPost(impl.getFullUrlPath("/resource_manager/matching_api/v1/match")).WithBody(query)
-	bodyBytes, err := impl.sendRequest(req)
+	req := http.NewPost(impl.getFullUrlPath("/resource_manager/matching_api/v1/match")).
+		WithBody(query)
+	if strings.TrimSpace(query.IdempotencyKey) != "" {
+		req = req.WithHeaders(map[string]string{HeaderKeyIdempotencyKey: query.IdempotencyKey})
+	}
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +311,7 @@ func (impl ClientImpl) UpdateScheduledMatch(ctx context.Context, id string, quer
 	if query != nil {
 		req = req.WithBody(query)
 	}
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +335,7 @@ func (impl ClientImpl) UpdateScheduledMatch(ctx context.Context, id string, quer
 
 func (impl ClientImpl) CommitScheduledMatch(ctx context.Context, id string) (*scheduled_plan_types.MatchingResult, error) {
 	req := http.NewPost(impl.getFullUrlPath(fmt.Sprintf("/resource_manager/matching_api/v1/match/%s/commit", id)))
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +362,7 @@ func (impl ClientImpl) GetSupplyDomains(ctx context.Context, req *supply_domain_
 	if req != nil {
 		httpReq = httpReq.WithQueryParam(req.GetParams())
 	}
-	bodyBytes, err := impl.sendRequest(httpReq)
+	bodyBytes, err := impl.sendRequest(ctx, httpReq)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +384,7 @@ func (impl ClientImpl) GetSupplyDomains(ctx context.Context, req *supply_domain_
 
 func (impl ClientImpl) GetMatchTimeline(ctx context.Context, matchID string) ([]scheduled_plan_types.MatchTimelineEntry, error) {
 	req := http.NewGet(impl.getFullUrlPath(fmt.Sprintf("/resource_manager/matching_api/v1/match/%s/timeline", matchID)))
-	bodyBytes, err := impl.sendRequest(req)
+	bodyBytes, err := impl.sendRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}

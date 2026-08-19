@@ -18,6 +18,7 @@ package supply_domain_types
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/bytequota_client/quota_types"
@@ -57,10 +58,10 @@ func (p *GetSupplyDomainsRequest) GetParams() map[string]string {
 		params["clusters"] = *p.Clusters
 	}
 	if p.ConvertUnit != nil {
-		params["convert_unit"] = "true"
+		params["convert_unit"] = strconv.FormatBool(*p.ConvertUnit)
 	}
 	if p.Detail != nil {
-		params["detail"] = "true"
+		params["detail"] = strconv.FormatBool(*p.Detail)
 	}
 	return params
 }

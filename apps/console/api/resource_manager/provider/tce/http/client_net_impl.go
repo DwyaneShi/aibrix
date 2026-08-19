@@ -17,9 +17,11 @@ package http
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	netHttp "net/http"
 	netUrl "net/url"
+	"time"
 
 	"github.com/vllm-project/aibrix/apps/console/api/resource_manager/provider/tce/json"
 	"k8s.io/klog/v2"
@@ -28,10 +30,15 @@ import (
 // ClientNetImpl 基于net/http库封装的http_client。
 // 一般情况下不建议使用这个，更建议使用ClientHertzImpl
 type ClientNetImpl struct {
+	client *netHttp.Client
 }
 
+const defaultClientTimeout = 90 * time.Second
+
 func NewClientNetImpl() *ClientNetImpl {
-	return &ClientNetImpl{}
+	return &ClientNetImpl{
+		client: &netHttp.Client{Timeout: defaultClientTimeout},
+	}
 }
 
 func (h ClientNetImpl) SendRequest(request *Request) (Response, error) {
@@ -58,18 +65,21 @@ func (h ClientNetImpl) SendRequest(request *Request) (Response, error) {
 	}
 
 	klog.V(4).Infof("request: %s %s %v", request.method, url, dataBytes)
-	return h.httpCon(request.Method(), url, dataBytes, request.Headers())
+	return h.httpCon(request.Context(), request.Method(), url, dataBytes, request.Headers())
 }
 
-func (h ClientNetImpl) httpCon(method, url string, data []byte, headers map[string]string) (response *ResponseNetImpl, err error) {
-	req, err := netHttp.NewRequest(method, url, bytes.NewBuffer(data))
+func (h ClientNetImpl) httpCon(ctx context.Context, method, url string, data []byte, headers map[string]string) (response *ResponseNetImpl, err error) {
+	req, err := netHttp.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(data))
 	if err != nil {
 		return nil, err
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := &netHttp.Client{}
+	client := h.client
+	if client == nil {
+		client = &netHttp.Client{Timeout: defaultClientTimeout}
+	}
 	httpResp, err := client.Do(req)
 	if err != nil {
 		return nil, err

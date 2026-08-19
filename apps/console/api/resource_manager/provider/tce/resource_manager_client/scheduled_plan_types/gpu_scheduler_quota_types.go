@@ -69,4 +69,7 @@ type QuotaViewItem struct {
 	HardwareAheadBookedRate int64  `json:"hardware_ahead_booked_rate"`
 	HardwareUsage           int64  `json:"hardware_usage"`
 	HardwareAvailable       int64  `json:"hardware_available"`
+	// 预测数据，仅在查询未来时间段的 quota 数据时返回。
+	HardwareSupplyPredicted      *int64 `json:"hardware_supply_predicted,omitempty"`
+	HardwareAllocatablePredicted *int64 `json:"hardware_allocatable_predicted,omitempty"`
 }

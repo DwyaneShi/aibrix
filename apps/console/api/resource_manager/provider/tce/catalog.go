@@ -168,38 +168,9 @@ func (c *tceCatalog) ListInstanceTypes(ctx context.Context, region *types.Region
 //		  "provider":"tce"
 //		}
 func (c *tceCatalog) ListResources(ctx context.Context, opts *catalog.ResourceListOptions) ([]catalog.Resource, error) {
-	req := &scheduled_plan_types.QuotaViewReq{}
-
-	if opts != nil && opts.StartTime != nil {
-		req.StartTime = opts.StartTime.UTC().Truncate(time.Hour)
-	} else {
-		req.StartTime = time.Now().UTC().Truncate(time.Hour)
-	}
-
-	if opts != nil && opts.EndTime != nil {
-		req.EndTime = opts.EndTime.UTC().Truncate(time.Hour)
-	} else {
-		req.EndTime = req.StartTime.Add(time.Hour)
-	}
-
-	if req.EndTime.Before(req.StartTime) {
-		return nil, fmt.Errorf("end time must be after start time")
-	}
-
-	if opts != nil && opts.Region.TCE != nil {
-		if opts.Region.TCE.Zone != "" {
-			req.Zones = []string{opts.Region.TCE.Zone}
-		}
-		if opts.Region.TCE.Dc != "" {
-			req.Dcs = []string{opts.Region.TCE.Dc}
-		}
-		if opts.Region.TCE.PhysicalCluster != "" || opts.Region.TCE.LogicalCluster != "" {
-			cluster := opts.Region.TCE.PhysicalCluster
-			if opts.Region.TCE.LogicalCluster != "" {
-				cluster += "/" + opts.Region.TCE.LogicalCluster
-			}
-			req.Clusters = []string{cluster}
-		}
+	req, err := buildQuotaViewRequest(opts)
+	if err != nil {
+		return nil, err
 	}
 
 	items, err := c.clientset.ResourceManagerClient.GetQuotaView(ctx, req)
@@ -235,6 +206,42 @@ func (c *tceCatalog) ListResources(ctx context.Context, opts *catalog.ResourceLi
 	}
 
 	return resources, nil
+}
+
+func buildQuotaViewRequest(opts *catalog.ResourceListOptions) (*scheduled_plan_types.QuotaViewReq, error) {
+	req := &scheduled_plan_types.QuotaViewReq{}
+	if opts != nil && opts.StartTime != nil {
+		req.StartTime = opts.StartTime.UTC().Truncate(time.Hour)
+	} else {
+		req.StartTime = time.Now().UTC().Truncate(time.Hour)
+	}
+
+	if opts != nil && opts.EndTime != nil {
+		req.EndTime = opts.EndTime.UTC().Truncate(time.Hour)
+	} else {
+		req.EndTime = req.StartTime.Add(time.Hour)
+	}
+
+	if req.EndTime.Before(req.StartTime) {
+		return nil, fmt.Errorf("end time must be after start time")
+	}
+
+	if opts != nil && opts.Region.TCE != nil {
+		if opts.Region.TCE.Zone != "" {
+			req.Zones = []string{opts.Region.TCE.Zone}
+		}
+		if opts.Region.TCE.Dc != "" {
+			req.Dcs = []string{opts.Region.TCE.Dc}
+		}
+		if opts.Region.TCE.PhysicalCluster != "" || opts.Region.TCE.LogicalCluster != "" {
+			cluster := opts.Region.TCE.PhysicalCluster
+			if opts.Region.TCE.LogicalCluster != "" {
+				cluster += "/" + opts.Region.TCE.LogicalCluster
+			}
+			req.Clusters = []string{cluster}
+		}
+	}
+	return req, nil
 }
 
 func buildRegionResourceItem(item *scheduled_plan_types.QuotaViewItem) catalog.RegionResourceItem {
@@ -277,7 +284,74 @@ func buildRegionResourceItem(item *scheduled_plan_types.QuotaViewItem) catalog.R
 
 // ListResourcePredictions lists resource predictions for the options.
 func (c *tceCatalog) ListResourcePredictions(ctx context.Context, opts *catalog.ResourceListOptions) (map[string]catalog.Resource, error) {
-	return nil, types.ErrNotImplemented
+	req, err := buildQuotaViewRequest(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	items, err := c.clientset.ResourceManagerClient.GetQuotaView(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("get quota view: %w", err)
+	}
+
+	resources := make(map[string]catalog.Resource)
+	for _, item := range items {
+		prediction, ok := buildRegionPredictionItem(item)
+		if !ok {
+			continue
+		}
+
+		region := types.NewTCERegion(item.Zone, item.Dc, item.PhysicalCluster, item.LogicalCluster)
+		regionKey := region.String()
+		resource, exists := resources[regionKey]
+		if !exists {
+			resource = catalog.Resource{
+				Provider: types.ResourceProvisionTypeTCE,
+				RegionResource: catalog.RegionResource{
+					Region:   region,
+					Overview: []catalog.RegionResourceItem{},
+				},
+			}
+		}
+		resource.Overview = append(resource.Overview, prediction)
+		resources[regionKey] = resource
+	}
+	return resources, nil
+}
+
+func buildRegionPredictionItem(item *scheduled_plan_types.QuotaViewItem) (catalog.RegionResourceItem, bool) {
+	if item.HardwareSupplyPredicted == nil && item.HardwareAllocatablePredicted == nil {
+		return catalog.RegionResourceItem{}, false
+	}
+
+	supply := make(catalog.ScheduledResourceItem)
+	if item.HardwareSupplyPredicted != nil {
+		supply[item.StartTime] = catalog.ResourceItem{
+			item.HardwareType: map[string]string{
+				item.HardwareKind: fmt.Sprintf("%d", *item.HardwareSupplyPredicted),
+			},
+		}
+	}
+	allocatable := make(catalog.ScheduledResourceItem)
+	if item.HardwareAllocatablePredicted != nil {
+		allocatable[item.StartTime] = catalog.ResourceItem{
+			item.HardwareType: map[string]string{
+				item.HardwareKind: fmt.Sprintf("%d", *item.HardwareAllocatablePredicted),
+			},
+		}
+	}
+
+	return catalog.RegionResourceItem{
+		Key:   "partition",
+		Value: item.Partition,
+		Stat: catalog.ResourceStat{
+			Scheduled: &catalog.ScheduledResourceStatItem{
+				Allocated:   make(catalog.ScheduledResourceItem),
+				Supply:      supply,
+				Allocatable: allocatable,
+			},
+		},
+	}, true
 }
 
 // ============================================================================

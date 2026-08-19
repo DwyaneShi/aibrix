@@ -61,8 +61,6 @@ func NewJwtHelper(secret, urlPrefix string) JwtHelper {
 }
 
 func (j *jwtHelperImpl) GenJwtToken(ctx context.Context) (string, error) {
-	_ = ctx
-
 	j.mutex.RLock()
 	if j.jwtToken != "" && time.Now().UTC().Before(j.expiresAt) {
 		token := j.jwtToken
@@ -77,7 +75,7 @@ func (j *jwtHelperImpl) GenJwtToken(ctx context.Context) (string, error) {
 		return j.jwtToken, nil
 	}
 
-	token, err := j.fetchJwtToken()
+	token, err := j.fetchJwtToken(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -86,10 +84,12 @@ func (j *jwtHelperImpl) GenJwtToken(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-func (j *jwtHelperImpl) fetchJwtToken() (string, error) {
-	req := rmhttp.NewGet(j.urlPrefix + authTokenPath).WithHeaders(map[string]string{
-		authorizationHeader: "Bearer " + j.secret,
-	})
+func (j *jwtHelperImpl) fetchJwtToken(ctx context.Context) (string, error) {
+	req := rmhttp.NewGet(j.urlPrefix + authTokenPath).
+		WithContext(ctx).
+		WithHeaders(map[string]string{
+			authorizationHeader: "Bearer " + j.secret,
+		})
 	resp, err := j.httpClient.SendRequest(req)
 	if err != nil {
 		return "", fmt.Errorf("request auth token failed: %w", err)
