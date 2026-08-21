@@ -18,6 +18,7 @@ package impl
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -44,6 +45,88 @@ func TestTCEPlannerBackendScheduleAcceptsCustomCompletionWindow(t *testing.T) {
 	}
 	if got := spec.TimeWindow.EndTime.Sub(spec.TimeWindow.StartTime); got != 98*time.Minute {
 		t.Fatalf("resource window = %v, want 98m", got)
+	}
+}
+
+func TestTCEPlannerBackendScheduleSetsExactResourceDuration(t *testing.T) {
+	backend := &tcePlannerBackend{}
+	spec, err := backend.Schedule(context.Background(), &plannerapi.EnqueueRequest{
+		BatchParams: openai.BatchNewParams{
+			CompletionWindow: "6h",
+		},
+		ResourceRequest: &plannerapi.ResourceRequest{
+			ProviderConfig: map[string]any{
+				"duration": "1h",
+			},
+		},
+		ModelTemplate: &plannerapi.ModelTemplateRef{
+			Spec: []byte(`{"accelerator": {"type": "NVIDIA-H20", "count": 1}}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if spec.TimeWindow == nil || spec.TimeWindow.EndTime == nil {
+		t.Fatalf("time window = %#v, want bounded resource window", spec.TimeWindow)
+	}
+	if got := spec.TimeWindow.EndTime.Sub(spec.TimeWindow.StartTime); got != 6*time.Hour {
+		t.Fatalf("matching window = %v, want 6h", got)
+	}
+	if spec.TimeWindow.MinDuration == nil || *spec.TimeWindow.MinDuration != 1 {
+		t.Fatalf("min duration = %v, want 1h", spec.TimeWindow.MinDuration)
+	}
+	if spec.TimeWindow.MaxDuration == nil || *spec.TimeWindow.MaxDuration != 1 {
+		t.Fatalf("max duration = %v, want 1h", spec.TimeWindow.MaxDuration)
+	}
+}
+
+func TestTCEPlannerBackendScheduleRejectsInvalidResourceDuration(t *testing.T) {
+	backend := &tcePlannerBackend{}
+	tests := []struct {
+		name     string
+		duration any
+	}{
+		{name: "non string", duration: 1},
+		{name: "invalid format", duration: "best_effort"},
+		{name: "fractional hour", duration: "90min"},
+		{name: "longer than window", duration: "12h"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := backend.Schedule(context.Background(), &plannerapi.EnqueueRequest{
+				BatchParams: openai.BatchNewParams{
+					CompletionWindow: "6h",
+				},
+				ResourceRequest: &plannerapi.ResourceRequest{
+					ProviderConfig: map[string]any{
+						"duration": tt.duration,
+					},
+				},
+				ModelTemplate: &plannerapi.ModelTemplateRef{
+					Spec: []byte(`{"accelerator": {"type": "NVIDIA-H20", "count": 1}}`),
+				},
+			})
+			if err == nil {
+				t.Fatal("Schedule unexpectedly succeeded")
+			}
+		})
+	}
+}
+
+func TestTCEPlannerBackendValidateRequestRejectsInvalidResourceDuration(t *testing.T) {
+	backend := &tcePlannerBackend{}
+	for _, duration := range []any{1, "best_effort", "90min", "12h"} {
+		req := &plannerapi.EnqueueRequest{
+			BatchParams: openai.BatchNewParams{CompletionWindow: "6h"},
+			ResourceRequest: &plannerapi.ResourceRequest{ProviderConfig: map[string]any{
+				"duration": duration,
+			}},
+			ModelTemplate: &plannerapi.ModelTemplateRef{Name: "template"},
+		}
+		err := backend.ValidateRequest(req)
+		if !errors.Is(err, plannerapi.ErrInvalidJob) {
+			t.Fatalf("duration %#v error = %v, want ErrInvalidJob", duration, err)
+		}
 	}
 }
 

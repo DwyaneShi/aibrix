@@ -420,11 +420,9 @@ func (p *tceProvisioner) buildMatchingIntentRequest(ctx context.Context, req *ty
 		}),
 	}
 
-	intent.TimeWindow = &scheduled_plan_types.TimeWindow{
-		StartTime:          req.Spec.TimeWindow.StartTime,
-		EndTime:            req.Spec.TimeWindow.EndTime,
-		Timezone:           utils.ToPtr("UTC"),
-		FlexibleAllocation: &scheduled_plan_types.FlexibleAllocation{},
+	intent.TimeWindow, err = toMatchingTimeWindow(req.Spec.TimeWindow, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("build matching time window: %w", err)
 	}
 
 	return &scheduled_plan_types.MatchingIntentRequest{
@@ -433,6 +431,81 @@ func (p *tceProvisioner) buildMatchingIntentRequest(ctx context.Context, req *ty
 		MatchingIntent: intent,
 		IdempotencyKey: req.IdempotencyKey,
 	}, nil
+}
+
+// toMatchingTimeWindow converts the planner window into the hour-granularity
+// window accepted by TCE Matching.
+//
+// Truncating a start time can move it into the past. In that case Matching may
+// return an allocation whose segment starts at the truncated hour, even though
+// part of that first hour has already elapsed. MinDuration remains the exact
+// amount of usable time the job requires, while MaxDuration is extended by one
+// hour so the returned segment may include that partially elapsed hour.
+//
+// For example, with a 6h completion window and a configured 1h duration:
+//   - now=10:30, planner window=10:35-16:35 -> Matching window=10:00-16:00,
+//     minDuration=1h and maxDuration=2h. As a side effect, the actual allocation
+//     window might be 10:00-11:00 and therefore the eventual runtime duration is
+//     actually less than 1h.
+//   - now=10:58, planner window=11:03-17:03 -> Matching window=11:00-17:00,
+//     minDuration=maxDuration=1h because the truncated start is still future.
+//
+// If the truncated outer window is shorter than the adjusted MaxDuration, its
+// end is extended just enough to keep the request internally consistent.
+func toMatchingTimeWindow(timeWindow *types.TimeWindow, now time.Time) (*scheduled_plan_types.TimeWindow, error) {
+	if timeWindow == nil || timeWindow.EndTime == nil {
+		return nil, fmt.Errorf("bounded time window is required")
+	}
+	if !timeWindow.EndTime.After(timeWindow.StartTime) {
+		return nil, fmt.Errorf("end time must be after start time")
+	}
+
+	result := &scheduled_plan_types.TimeWindow{
+		StartTime: timeWindow.StartTime.UTC(),
+		EndTime:   utils.ToPtr(timeWindow.EndTime.UTC()),
+		Timezone:  utils.ToPtr("UTC"),
+	}
+	if timeWindow.MinDuration == nil && timeWindow.MaxDuration == nil {
+		return result, nil
+	}
+
+	startTime := timeWindow.StartTime.UTC().Truncate(time.Hour)
+	endTime := timeWindow.EndTime.UTC().Truncate(time.Hour)
+	if !endTime.After(startTime) {
+		return nil, fmt.Errorf("time window must cover at least one whole hour")
+	}
+	durationAdjustment := 0
+	if startTime.Before(now.UTC()) {
+		durationAdjustment = 1
+	}
+	minDuration := addDurationAdjustment(timeWindow.MinDuration, 0)
+	maxDuration := addDurationAdjustment(timeWindow.MaxDuration, durationAdjustment)
+	requiredDurationHours := 0
+	if minDuration != nil {
+		requiredDurationHours = *minDuration
+	}
+	if maxDuration != nil && *maxDuration > requiredDurationHours {
+		requiredDurationHours = *maxDuration
+	}
+	requiredEndTime := startTime.Add(time.Duration(requiredDurationHours) * time.Hour)
+	if endTime.Before(requiredEndTime) {
+		endTime = requiredEndTime
+	}
+	result.StartTime = startTime
+	result.EndTime = &endTime
+	result.FlexibleAllocation = &scheduled_plan_types.FlexibleAllocation{
+		MinDuration: minDuration,
+		MaxDuration: maxDuration,
+	}
+	return result, nil
+}
+
+func addDurationAdjustment(duration *int, adjustment int) *int {
+	if duration == nil {
+		return nil
+	}
+	adjusted := *duration + adjustment
+	return &adjusted
 }
 
 func buildMatchingGroups(groups *[]types.ResourceGroupSpec) (*[]scheduled_plan_types.GroupSpec, error) {

@@ -64,6 +64,18 @@ func (b *tcePlannerBackend) ValidateRequest(req *plannerapi.EnqueueRequest) erro
 	if req.ModelTemplate == nil || req.ModelTemplate.Name == "" {
 		return fmt.Errorf("%w: missing model_template", plannerapi.ErrInvalidJob)
 	}
+	completionWindow, err := utils.ParseCompletionWindow(string(req.BatchParams.CompletionWindow))
+	if err != nil {
+		return fmt.Errorf("%w: parse completion window: %v", plannerapi.ErrInvalidJob, err)
+	}
+	matchingWindow := max(completionWindow, time.Hour)
+	var providerConfig map[string]any
+	if req.ResourceRequest != nil {
+		providerConfig = req.ResourceRequest.ProviderConfig
+	}
+	if _, err := parseTCEProviderDuration(providerConfig, matchingWindow); err != nil {
+		return fmt.Errorf("%w: %v", plannerapi.ErrInvalidJob, err)
+	}
 	return nil
 }
 
@@ -76,16 +88,28 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 		gpuType = canonicalType
 	}
 
-	// Default and minimum time window is 1 hour
-	timeWindow := time.Hour
+	// Default and minimum matching window is 1 hour.
+	matchingWindow := time.Hour
 	startTime := time.Now().UTC().Add(5 * time.Minute)
 	if req.BatchParams.CompletionWindow != "" {
-		// Update time window if it's valid and greater than default time window
-		if completionWindow, err := utils.ParseCompletionWindow(string(req.BatchParams.CompletionWindow)); err == nil && completionWindow > timeWindow {
-			timeWindow = completionWindow
+		completionWindow, parseErr := utils.ParseCompletionWindow(string(req.BatchParams.CompletionWindow))
+		if parseErr != nil {
+			return spec, fmt.Errorf("parse completion window: %w", parseErr)
+		}
+		if completionWindow > matchingWindow {
+			matchingWindow = completionWindow
 		}
 	}
-	endTime := startTime.Add(timeWindow)
+	endTime := startTime.Add(matchingWindow)
+
+	var providerConfig map[string]any
+	if req.ResourceRequest != nil {
+		providerConfig = req.ResourceRequest.ProviderConfig
+	}
+	exactDurationHours, err := parseTCEProviderDuration(providerConfig, matchingWindow)
+	if err != nil {
+		return spec, err
+	}
 
 	group := buildProvisionGroupPlan(gpuType, gpusPerReplica, requestedReplicas(req))
 	if cpuCoresPerGPU, ok := tceMatchingCPUCoresPerGPU[gpuType]; ok && gpusPerReplica > 0 {
@@ -102,11 +126,39 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 		},
 		Groups: &[]rmtypes.ResourceGroupSpec{group},
 		TimeWindow: &rmtypes.TimeWindow{
-			StartTime: startTime,
-			EndTime:   &endTime,
+			StartTime:   startTime,
+			EndTime:     &endTime,
+			MinDuration: exactDurationHours,
+			MaxDuration: exactDurationHours,
 		},
 	}
 	return spec, nil
+}
+
+func parseTCEProviderDuration(
+	providerConfig map[string]any,
+	matchingWindow time.Duration,
+) (*int, error) {
+	value, ok := providerConfig["duration"]
+	if !ok {
+		return nil, nil
+	}
+	durationValue, ok := value.(string)
+	if !ok || durationValue == "" {
+		return nil, fmt.Errorf("provider_config.duration must be a duration string")
+	}
+	duration, err := utils.ParseCompletionWindow(durationValue)
+	if err != nil {
+		return nil, fmt.Errorf("parse provider_config.duration: %w", err)
+	}
+	if duration%time.Hour != 0 {
+		return nil, fmt.Errorf("provider_config.duration must use whole hours")
+	}
+	if duration > matchingWindow {
+		return nil, fmt.Errorf("provider_config.duration must not exceed completion window")
+	}
+	durationHours := int(duration / time.Hour)
+	return &durationHours, nil
 }
 
 func (b *tcePlannerBackend) LogProvisionResponse(jobID string, prov *rmtypes.ProvisionResult, spec rmtypes.ResourceProvisionSpec) {

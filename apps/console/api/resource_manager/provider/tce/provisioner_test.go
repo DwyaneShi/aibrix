@@ -225,6 +225,79 @@ func TestBuildMatchingGroupsPreservesRTX6000DResources(t *testing.T) {
 	assert.Equal(t, []string{"NVIDIA-RTX-6000D"}, *group.AcceleratorPreference.PreferredTypes)
 }
 
+func TestToMatchingTimeWindowAdjustsDurationWhenTruncatedStartIsPast(t *testing.T) {
+	now := time.Date(2026, time.August, 19, 10, 30, 0, 0, time.UTC)
+	startTime := now.Add(5 * time.Minute)
+	endTime := startTime.Add(6 * time.Hour)
+	durationHours := 1
+
+	got, err := toMatchingTimeWindow(&types.TimeWindow{
+		StartTime:   startTime,
+		EndTime:     &endTime,
+		MinDuration: &durationHours,
+		MaxDuration: &durationHours,
+	}, now)
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.EndTime)
+	assert.Equal(t, time.Date(2026, time.August, 19, 10, 0, 0, 0, time.UTC), got.StartTime)
+	assert.Equal(t, time.Date(2026, time.August, 19, 16, 0, 0, 0, time.UTC), *got.EndTime)
+	require.NotNil(t, got.FlexibleAllocation)
+	require.NotNil(t, got.FlexibleAllocation.MinDuration)
+	require.NotNil(t, got.FlexibleAllocation.MaxDuration)
+	assert.Equal(t, 1, *got.FlexibleAllocation.MinDuration)
+	assert.Equal(t, 2, *got.FlexibleAllocation.MaxDuration)
+}
+
+func TestToMatchingTimeWindowKeepsDurationWhenTruncatedStartIsFuture(t *testing.T) {
+	now := time.Date(2026, time.August, 19, 10, 58, 0, 0, time.UTC)
+	startTime := now.Add(5 * time.Minute)
+	endTime := startTime.Add(6 * time.Hour)
+	durationHours := 1
+
+	got, err := toMatchingTimeWindow(&types.TimeWindow{
+		StartTime:   startTime,
+		EndTime:     &endTime,
+		MinDuration: &durationHours,
+		MaxDuration: &durationHours,
+	}, now)
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.EndTime)
+	assert.Equal(t, time.Date(2026, time.August, 19, 11, 0, 0, 0, time.UTC), got.StartTime)
+	assert.Equal(t, time.Date(2026, time.August, 19, 17, 0, 0, 0, time.UTC), *got.EndTime)
+	require.NotNil(t, got.FlexibleAllocation)
+	require.NotNil(t, got.FlexibleAllocation.MinDuration)
+	require.NotNil(t, got.FlexibleAllocation.MaxDuration)
+	assert.Equal(t, 1, *got.FlexibleAllocation.MinDuration)
+	assert.Equal(t, 1, *got.FlexibleAllocation.MaxDuration)
+}
+
+func TestToMatchingTimeWindowExpandsShortWindowForAdjustedDuration(t *testing.T) {
+	now := time.Date(2026, time.August, 19, 10, 20, 0, 0, time.UTC)
+	startTime := now.Add(5 * time.Minute)
+	endTime := startTime.Add(time.Hour)
+	durationHours := 1
+
+	got, err := toMatchingTimeWindow(&types.TimeWindow{
+		StartTime:   startTime,
+		EndTime:     &endTime,
+		MinDuration: &durationHours,
+		MaxDuration: &durationHours,
+	}, now)
+
+	require.NoError(t, err)
+	require.NotNil(t, got.EndTime)
+	assert.Equal(t, 2*time.Hour, got.EndTime.Sub(got.StartTime))
+	require.NotNil(t, got.FlexibleAllocation)
+	require.NotNil(t, got.FlexibleAllocation.MinDuration)
+	require.NotNil(t, got.FlexibleAllocation.MaxDuration)
+	assert.Equal(t, 1, *got.FlexibleAllocation.MinDuration)
+	assert.Equal(t, 2, *got.FlexibleAllocation.MaxDuration)
+}
+
 func TestTCEProvisioner_ProvisionFailed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

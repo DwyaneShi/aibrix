@@ -426,6 +426,12 @@ func submitToMDS(p *Planner, job *queuedJob) {
 
 	job.batchID = batch.ID
 	job.batch = batch
+	// Persist the exact params accepted by MDS. The requested completion window
+	// can be the broad TCE matching/search window (for example 24h), while the
+	// effective value is bounded by the actual allocation segment (for example
+	// 1h). Keeping the original request here would make ListJobs and recovery
+	// report the search window instead of the runtime deadline.
+	job.req.BatchParams = batchParams
 	if batch.ExpiresAt > 0 {
 		job.expiresAt = time.Unix(batch.ExpiresAt, 0).UTC()
 	}

@@ -248,8 +248,15 @@ type MatchingIntentRequest struct {
 }
 
 func (i *MatchingIntent) Validate() ([]string, error) {
-	var requester = i.Requester
 	var warnings = []string{}
+
+	if i == nil {
+		return warnings, fmt.Errorf("matching intent is required")
+	}
+	requester := i.Requester
+	if requester == nil {
+		return warnings, fmt.Errorf(".requester is required")
+	}
 
 	if requester.BusinessLineId == "" {
 		return warnings, fmt.Errorf(".requester.businessLineId is required")
@@ -271,7 +278,7 @@ func (i *MatchingIntent) Validate() ([]string, error) {
 		return warnings, fmt.Errorf(".timeWindow.startTime is required")
 	}
 
-	if i.TimeWindow.EndTime.IsZero() {
+	if i.TimeWindow.EndTime == nil || i.TimeWindow.EndTime.IsZero() {
 		return warnings, fmt.Errorf(".timeWindow.endTime is required")
 	}
 
@@ -293,18 +300,36 @@ func (i *MatchingIntent) Validate() ([]string, error) {
 		return warnings, fmt.Errorf(".timeWindow.endTime must before %v", maxTime)
 	}
 
-	if int64(i.TimeWindow.Duration().Hours()) < i.GetMinDuration() {
-		return warnings, fmt.Errorf("duration betwern .timeWindow.startTime and .timeWindow.endTime must be large than minDuration %v", i.GetMinDuration())
+	windowDuration := i.TimeWindow.Duration()
+	if windowDuration <= 0 {
+		return warnings, fmt.Errorf(".timeWindow.endTime must be after .timeWindow.startTime")
 	}
 
-	if int64(i.TimeWindow.Duration().Hours()) < i.GetMaxDuration() {
-		return warnings, fmt.Errorf("duration betwern .timeWindow.startTime and .timeWindow.endTime must be large than maxDuration %v", i.GetMaxDuration())
+	minDuration := i.GetMinDuration()
+	maxDuration := i.GetMaxDuration()
+	if i.TimeWindow.FlexibleAllocation != nil &&
+		i.TimeWindow.FlexibleAllocation.MinDuration != nil &&
+		minDuration <= 0 {
+		return warnings, fmt.Errorf("minDuration must be positive")
+	}
+	if i.TimeWindow.FlexibleAllocation != nil &&
+		i.TimeWindow.FlexibleAllocation.MaxDuration != nil &&
+		maxDuration <= 0 {
+		return warnings, fmt.Errorf("maxDuration must be positive")
+	}
+	if minDuration > 0 && windowDuration < time.Duration(minDuration)*time.Hour {
+		return warnings, fmt.Errorf("duration between .timeWindow.startTime and .timeWindow.endTime must be at least minDuration %v", minDuration)
+	}
+	if maxDuration > 0 && windowDuration < time.Duration(maxDuration)*time.Hour {
+		return warnings, fmt.Errorf("duration between .timeWindow.startTime and .timeWindow.endTime must be at least maxDuration %v", maxDuration)
+	}
+	if maxDuration > 0 && minDuration > maxDuration {
+		return warnings, fmt.Errorf("minDuration %d must not exceed maxDuration %d", minDuration, maxDuration)
 	}
 
-	if int64(i.GetMaxDuration()) > 0 && int64(i.GetMinDuration()) > int64(i.GetMaxDuration()) {
-		return warnings, fmt.Errorf("minDuration %d must be large than maxDuration %d", i.GetMinDuration(), i.GetMaxDuration())
+	if i.Groups == nil {
+		return warnings, fmt.Errorf(".groups[0] is required")
 	}
-
 	groups := *i.Groups
 	if len(groups) == 0 {
 		return warnings, fmt.Errorf(".groups[0] is required")
@@ -419,6 +444,9 @@ func (i *MatchingIntent) GetMaxDuration() int64 {
 }
 
 func (i *MatchingIntent) IsSameNodeLevel() bool {
+	if i == nil || i.Groups == nil {
+		return false
+	}
 	var isSameNodeLevel = true
 	for _, x := range *i.Groups {
 		if !x.IsSameNodeLevel() {
@@ -430,8 +458,9 @@ func (i *MatchingIntent) IsSameNodeLevel() bool {
 }
 
 func (i *MatchingIntent) GetFlexibleAllocationPriority() FlexibleAllocationPriority {
-	if i.TimeWindow.FlexibleAllocation.Priority == nil {
+	if i == nil || i.TimeWindow == nil || i.TimeWindow.FlexibleAllocation == nil ||
+		i.TimeWindow.FlexibleAllocation.Priority == nil {
 		return FlexibleAllocationPriorityAny
 	}
-	return FlexibleAllocationPriorityEarliest
+	return *i.TimeWindow.FlexibleAllocation.Priority
 }
