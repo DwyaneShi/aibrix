@@ -80,6 +80,9 @@ type Config struct {
 	// PlannerWorkerCount is the number of worker threads to use for the planner.
 	// Defaults to 10.
 	PlannerWorkerCount int
+	// PlannerMaxConcurrentProvision limits how many jobs may provision resources
+	// concurrently. Defaults to 1.
+	PlannerMaxConcurrentProvision int
 
 	// GRPCAddr is the listen address for the gRPC server.
 	GRPCAddr string
@@ -194,6 +197,13 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	plannerMaxConcurrentProvision, err := strconv.Atoi(envOrDefault("PLANNER_MAX_CONCURRENT_PROVISION", "1"))
+	if err != nil {
+		return nil, fmt.Errorf("PLANNER_MAX_CONCURRENT_PROVISION must be a positive integer: %w", err)
+	}
+	if plannerMaxConcurrentProvision <= 0 {
+		return nil, fmt.Errorf("PLANNER_MAX_CONCURRENT_PROVISION must be a positive integer")
+	}
 	metadataFileUploadTimeout, err := envDurationOrDefault(
 		"METADATA_FILE_UPLOAD_TIMEOUT",
 		defaultMetadataFileUploadTimeout,
@@ -211,6 +221,7 @@ func Load() (*Config, error) {
 		Provisioner:                         envOrDefault("PROVISIONER", "kubernetes"),
 		PlanningPolicy:                      envOrDefault("PLANNING_POLICY", "simple"),
 		PlannerWorkerCount:                  plannerWorkerCount,
+		PlannerMaxConcurrentProvision:       plannerMaxConcurrentProvision,
 		GRPCAddr:                            envOrDefault("GRPC_ADDR", ":50060"),
 		HTTPAddr:                            envOrDefault("HTTP_ADDR", ":8080"),
 		AuthMode:                            authMode,
