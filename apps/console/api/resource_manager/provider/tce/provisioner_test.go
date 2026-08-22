@@ -59,9 +59,10 @@ func TestTCEProvisioner_ProvisionListRelease(t *testing.T) {
 	// Test data
 	idempotencyKey := "test-idempotency-key-123"
 	matchId := "match-123"
+	userPSM := "user.batch.inference"
 
-	// Setup mock for GetBusinessLineInfo (called during Provision)
-	mockBQClient.EXPECT().GetBusinessLineInfo(gomock.Any(), "test-psm", "Compute").
+	// The PSM entered in the Console must reach the ByteQuota lookup unchanged.
+	mockBQClient.EXPECT().GetBusinessLineInfo(gomock.Any(), userPSM, "Compute").
 		Return(&bytequota_client.BusinessLineInfo{
 			BusinessLineId:   "test-business-line-id",
 			BusinessLineName: "test-business-line-name",
@@ -72,6 +73,9 @@ func TestTCEProvisioner_ProvisionListRelease(t *testing.T) {
 	mockRMClient.EXPECT().CreateScheduledMatch(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(ctx context.Context, req *scheduled_plan_types.MatchingIntentRequest) (*scheduled_plan_types.MatchingResult, error) {
 			assert.Equal(t, idempotencyKey, req.IdempotencyKey)
+			require.NotNil(t, req.MatchingIntent)
+			require.NotNil(t, req.MatchingIntent.ExtraFields)
+			assert.Equal(t, userPSM, (*req.MatchingIntent.ExtraFields)["provisionPSM"])
 			return &scheduled_plan_types.MatchingResult{
 				MatchId: matchId,
 				Status:  scheduled_plan_types.MatchingResultStatusBooking,
@@ -88,7 +92,7 @@ func TestTCEProvisioner_ProvisionListRelease(t *testing.T) {
 				Provider: types.ResourceProvisionTypeTCE,
 				ExtensionResourceCredentials: types.ExtensionResourceCredentials{
 					TCE: &types.TCECredential{
-						PSM: utils.ToPtr("test-psm"),
+						PSM: utils.ToPtr(userPSM),
 					},
 				},
 			},

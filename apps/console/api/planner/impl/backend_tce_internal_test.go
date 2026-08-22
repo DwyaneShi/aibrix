@@ -48,6 +48,14 @@ func TestTCEPlannerBackendScheduleAcceptsCustomCompletionWindow(t *testing.T) {
 	}
 }
 
+func TestTCEPlannerBackendFormatsCatalogRegionAsDC(t *testing.T) {
+	region := rmtypes.NewTCERegion("China-North", "LF", "Gallipoli", "seed")
+
+	if got := (&tcePlannerBackend{}).FormatRegion(region); got != "LF" {
+		t.Fatalf("FormatRegion() = %q, want LF", got)
+	}
+}
+
 func TestTCEPlannerBackendScheduleSetsExactResourceDuration(t *testing.T) {
 	backend := &tcePlannerBackend{}
 	spec, err := backend.Schedule(context.Background(), &plannerapi.EnqueueRequest{
@@ -77,6 +85,92 @@ func TestTCEPlannerBackendScheduleSetsExactResourceDuration(t *testing.T) {
 	}
 	if spec.TimeWindow.MaxDuration == nil || *spec.TimeWindow.MaxDuration != 1 {
 		t.Fatalf("max duration = %v, want 1h", spec.TimeWindow.MaxDuration)
+	}
+}
+
+func TestTCEPlannerBackendScheduleMapsScheduledResourceConfig(t *testing.T) {
+	backend := &tcePlannerBackend{}
+	req := &plannerapi.EnqueueRequest{
+		BatchParams: openai.BatchNewParams{
+			CompletionWindow: "6h",
+		},
+		ResourceRequest: &plannerapi.ResourceRequest{
+			ProviderConfig: map[string]any{
+				"resource_type": "scheduled",
+				"psm":           "user.batch.inference",
+				"regions":       []any{"LF", "HL"},
+				"duration":      "2h",
+			},
+		},
+		ModelTemplate: &plannerapi.ModelTemplateRef{
+			Name: "template",
+			Spec: []byte(`{"accelerator": {"type": "NVIDIA-H20", "count": 1}}`),
+		},
+	}
+
+	if err := backend.ValidateRequest(req); err != nil {
+		t.Fatalf("ValidateRequest: %v", err)
+	}
+	spec, err := backend.Schedule(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if spec.Credential.TCE == nil || spec.Credential.TCE.PSM == nil ||
+		*spec.Credential.TCE.PSM != "user.batch.inference" {
+		t.Fatalf("credential = %#v, want user-entered PSM", spec.Credential.TCE)
+	}
+	if spec.Groups == nil || len(*spec.Groups) != 1 || (*spec.Groups)[0].TCE == nil {
+		t.Fatalf("groups = %#v, want one TCE group", spec.Groups)
+	}
+	required := (*spec.Groups)[0].TCE.RegionAffinity.Dc.Required
+	if required == nil || len(*required) != 2 || (*required)[0] != "LF" || (*required)[1] != "HL" {
+		t.Fatalf("required DCs = %#v, want [LF HL]", required)
+	}
+}
+
+func TestTCEPlannerBackendValidateScheduledResourceConfig(t *testing.T) {
+	backend := &tcePlannerBackend{}
+	tests := []struct {
+		name           string
+		providerConfig map[string]any
+	}{
+		{
+			name: "missing psm",
+			providerConfig: map[string]any{
+				"resource_type": "scheduled",
+			},
+		},
+		{
+			name: "unsupported reserved",
+			providerConfig: map[string]any{
+				"resource_type": "reserved",
+				"psm":           "inf.aibrix.platform",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := backend.ValidateRequest(&plannerapi.EnqueueRequest{
+				BatchParams: openai.BatchNewParams{CompletionWindow: "6h"},
+				ResourceRequest: &plannerapi.ResourceRequest{
+					ProviderConfig: tt.providerConfig,
+				},
+				ModelTemplate: &plannerapi.ModelTemplateRef{Name: "template"},
+			})
+			if !errors.Is(err, plannerapi.ErrInvalidJob) {
+				t.Fatalf("ValidateRequest error = %v, want ErrInvalidJob", err)
+			}
+		})
+	}
+}
+
+func TestParseTCEProviderRegionsRejectsEmptyRegion(t *testing.T) {
+	_, err := parseTCEProviderRegions(map[string]any{
+		"regions": []string{"LF", ""},
+	})
+	if err == nil {
+		t.Fatal("parseTCEProviderRegions unexpectedly accepted an empty region")
 	}
 }
 

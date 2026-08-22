@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"k8s.io/klog/v2"
@@ -43,6 +44,7 @@ var tceMatchingAcceleratorTypeAliases = map[string]string{
 const (
 	tceRTX6000DAcceleratorType = "NVIDIA-RTX-6000D"
 	tceRTX6000DCPUCoresPerGPU  = 14
+	tceResourceTypeScheduled   = "scheduled"
 )
 
 var tceMatchingCPUCoresPerGPU = map[string]int{
@@ -60,6 +62,13 @@ func init() {
 
 type tcePlannerBackend struct{}
 
+func (b *tcePlannerBackend) FormatRegion(region *rmtypes.RegionSpec) string {
+	if region == nil || region.TCE == nil {
+		return ""
+	}
+	return region.TCE.Dc
+}
+
 func (b *tcePlannerBackend) ValidateRequest(req *plannerapi.EnqueueRequest) error {
 	if req.ModelTemplate == nil || req.ModelTemplate.Name == "" {
 		return fmt.Errorf("%w: missing model_template", plannerapi.ErrInvalidJob)
@@ -69,9 +78,19 @@ func (b *tcePlannerBackend) ValidateRequest(req *plannerapi.EnqueueRequest) erro
 		return fmt.Errorf("%w: parse completion window: %v", plannerapi.ErrInvalidJob, err)
 	}
 	matchingWindow := max(completionWindow, time.Hour)
-	var providerConfig map[string]any
-	if req.ResourceRequest != nil {
-		providerConfig = req.ResourceRequest.ProviderConfig
+	providerConfig := tceProviderConfig(req)
+	resourceType, resourceTypeConfigured, err := parseTCEProviderResourceType(providerConfig)
+	if err != nil {
+		return fmt.Errorf("%w: %v", plannerapi.ErrInvalidJob, err)
+	}
+	if _, err := parseTCEProviderPSM(
+		providerConfig,
+		resourceTypeConfigured && resourceType == tceResourceTypeScheduled,
+	); err != nil {
+		return fmt.Errorf("%w: %v", plannerapi.ErrInvalidJob, err)
+	}
+	if _, err := parseTCEProviderRegions(providerConfig); err != nil {
+		return fmt.Errorf("%w: %v", plannerapi.ErrInvalidJob, err)
 	}
 	if _, err := parseTCEProviderDuration(providerConfig, matchingWindow); err != nil {
 		return fmt.Errorf("%w: %v", plannerapi.ErrInvalidJob, err)
@@ -102,26 +121,46 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 	}
 	endTime := startTime.Add(matchingWindow)
 
-	var providerConfig map[string]any
-	if req.ResourceRequest != nil {
-		providerConfig = req.ResourceRequest.ProviderConfig
+	providerConfig := tceProviderConfig(req)
+	resourceType, resourceTypeConfigured, err := parseTCEProviderResourceType(providerConfig)
+	if err != nil {
+		return spec, err
 	}
 	exactDurationHours, err := parseTCEProviderDuration(providerConfig, matchingWindow)
 	if err != nil {
 		return spec, err
 	}
+	psm, err := parseTCEProviderPSM(
+		providerConfig,
+		resourceTypeConfigured && resourceType == tceResourceTypeScheduled,
+	)
+	if err != nil {
+		return spec, err
+	}
+	regions, err := parseTCEProviderRegions(providerConfig)
+	if err != nil {
+		return spec, err
+	}
 
 	group := buildProvisionGroupPlan(gpuType, gpusPerReplica, requestedReplicas(req))
+	if len(regions) > 0 {
+		group.TCE = &rmtypes.TCEGroupOptions{}
+		group.TCE.RegionAffinity.Dc.Required = &regions
+	}
 	if cpuCoresPerGPU, ok := tceMatchingCPUCoresPerGPU[gpuType]; ok && gpusPerReplica > 0 {
 		cpuCoresPerReplica := cpuCoresPerGPU * gpusPerReplica
 		group.CpuCoresPerReplica = &cpuCoresPerReplica
 	}
 
+	tceCredential := &rmtypes.TCECredential{}
+	if psm != "" {
+		tceCredential.PSM = &psm
+	}
 	spec = rmtypes.ResourceProvisionSpec{
 		Credential: rmtypes.ResourceCredential{
 			Provider: rmtypes.ResourceProvisionTypeTCE,
 			ExtensionResourceCredentials: rmtypes.ExtensionResourceCredentials{
-				TCE: &rmtypes.TCECredential{},
+				TCE: tceCredential,
 			},
 		},
 		Groups: &[]rmtypes.ResourceGroupSpec{group},
@@ -133,6 +172,79 @@ func (b *tcePlannerBackend) Schedule(_ context.Context, req *plannerapi.EnqueueR
 		},
 	}
 	return spec, nil
+}
+
+func tceProviderConfig(req *plannerapi.EnqueueRequest) map[string]any {
+	if req == nil || req.ResourceRequest == nil {
+		return nil
+	}
+	return req.ResourceRequest.ProviderConfig
+}
+
+func parseTCEProviderResourceType(providerConfig map[string]any) (string, bool, error) {
+	value, ok := providerConfig["resource_type"]
+	if !ok {
+		return tceResourceTypeScheduled, false, nil
+	}
+	resourceType, ok := value.(string)
+	if !ok || strings.TrimSpace(resourceType) == "" {
+		return "", true, fmt.Errorf("provider_config.resource_type must be a resource type string")
+	}
+	resourceType = strings.ToLower(strings.TrimSpace(resourceType))
+	if resourceType != tceResourceTypeScheduled {
+		return "", true, fmt.Errorf("provider_config.resource_type %q is not supported yet", resourceType)
+	}
+	return resourceType, true, nil
+}
+
+func parseTCEProviderPSM(providerConfig map[string]any, required bool) (string, error) {
+	value, ok := providerConfig["psm"]
+	if !ok {
+		if required {
+			return "", fmt.Errorf("provider_config.psm is required for scheduled resources")
+		}
+		return "", nil
+	}
+	psm, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("provider_config.psm must be a string")
+	}
+	psm = strings.TrimSpace(psm)
+	if psm == "" && required {
+		return "", fmt.Errorf("provider_config.psm is required for scheduled resources")
+	}
+	if psm == "" {
+		return "", nil
+	}
+	return psm, nil
+}
+
+func parseTCEProviderRegions(providerConfig map[string]any) ([]string, error) {
+	value, ok := providerConfig["regions"]
+	if !ok || value == nil {
+		return nil, nil
+	}
+	values, ok := value.([]any)
+	if !ok {
+		if typedRegions, ok := value.([]string); ok {
+			values = make([]any, len(typedRegions))
+			for i, region := range typedRegions {
+				values[i] = region
+			}
+		} else {
+			return nil, fmt.Errorf("provider_config.regions must be an array of strings")
+		}
+	}
+	regions := make([]string, 0, len(values))
+	for _, value := range values {
+		region, ok := value.(string)
+		region = strings.TrimSpace(region)
+		if !ok || region == "" {
+			return nil, fmt.Errorf("provider_config.regions must contain non-empty strings")
+		}
+		regions = append(regions, region)
+	}
+	return regions, nil
 }
 
 func parseTCEProviderDuration(
