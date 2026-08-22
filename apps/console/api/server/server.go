@@ -19,7 +19,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -51,15 +50,16 @@ import (
 
 // Server holds the gRPC and HTTP servers for the console backend.
 type Server struct {
-	grpcServer     *grpc.Server
-	httpServer     *http.Server
-	store          store.Store
-	cfg            *config.Config
-	auth           *middleware.AuthMiddleware
-	planner        plannerapi.Planner
-	injector       error_injection.Injector
-	metricsHandler http.Handler
-	clusterClients provider.ClusterClientProvider
+	grpcServer      *grpc.Server
+	httpServer      *http.Server
+	store           store.Store
+	cfg             *config.Config
+	auth            *middleware.AuthMiddleware
+	planner         plannerapi.Planner
+	resourceManager *resource_manager.ResourceManager
+	injector        error_injection.Injector
+	metricsHandler  http.Handler
+	clusterClients  provider.ClusterClientProvider
 }
 
 // New creates a new console Server from configuration.
@@ -125,13 +125,36 @@ func New(cfg *config.Config) *Server {
 		klog.Fatalf("Failed to construct auth middleware: %v", err)
 	}
 
+	rm, err := resource_manager.NewResourceManager(
+		rmtypes.ResourceProvisionType(cfg.Provisioner),
+		s,
+		injector,
+	)
+	if err != nil {
+		klog.Fatalf("Failed to construct resource manager: %v", err)
+	}
+	planner := plannerimpl.NewPlanner(plannerimpl.PlannerConfig{
+		BatchClient:            plannerclient.NewOpenAIBatchClient(cfg.MetadataServiceURL, injector),
+		Provisioner:            rm.Provisioner,
+		Store:                  s,
+		PolicyType:             plannerimpl.PlanningPolicyType(cfg.PlanningPolicy),
+		WorkerCount:            cfg.PlannerWorkerCount,
+		MaxConcurrentProvision: cfg.PlannerMaxConcurrentProvision,
+		Injector:               injector,
+	})
+	if planner == nil {
+		klog.Fatal("Failed to construct planner")
+	}
+
 	return &Server{
-		store:          s,
-		cfg:            cfg,
-		auth:           auth,
-		injector:       injector,
-		metricsHandler: metricsHandler,
-		clusterClients: provider.NewKubernetesClientProvider(cfg.KubernetesProvider),
+		store:           s,
+		cfg:             cfg,
+		auth:            auth,
+		planner:         planner,
+		resourceManager: rm,
+		injector:        injector,
+		metricsHandler:  metricsHandler,
+		clusterClients:  provider.NewKubernetesClientProvider(cfg.KubernetesProvider),
 	}
 }
 
@@ -144,20 +167,6 @@ func (s *Server) StartGRPC(addr string) error {
 
 	s.grpcServer = grpc.NewServer()
 
-	batchClient := plannerclient.NewOpenAIBatchClient(s.cfg.MetadataServiceURL, s.injector)
-	rm, err := resource_manager.NewResourceManager(rmtypes.ResourceProvisionType(s.cfg.Provisioner), s.store, s.injector)
-	if err != nil {
-		return fmt.Errorf("resource manager init: %w", err)
-	}
-	s.planner = plannerimpl.NewPlanner(plannerimpl.PlannerConfig{
-		BatchClient:            batchClient,
-		Provisioner:            rm.Provisioner,
-		Store:                  s.store,
-		PolicyType:             plannerimpl.PlanningPolicyType(s.cfg.PlanningPolicy),
-		WorkerCount:            s.cfg.PlannerWorkerCount,
-		MaxConcurrentProvision: s.cfg.PlannerMaxConcurrentProvision,
-		Injector:               s.injector,
-	})
 	if err := s.planner.Recover(context.Background()); err != nil {
 		klog.Warningf("planner recovery failed (continuing without recovered jobs): %v", err)
 	}
@@ -247,6 +256,15 @@ func (s *Server) StartHTTP(httpAddr, grpcAddr string) error {
 	// Register the Kubernetes-backed ModelAdapter BFF.
 	modelAdapterHandler := handler.NewModelAdapterHandler(s.clusterClients)
 	if err := modelAdapterHandler.RegisterRoutes(mux); err != nil {
+		return err
+	}
+
+	catalogHandler := handler.NewCatalogHandler(
+		s.resourceManager.Catalog,
+		s.planner,
+		s.cfg.DevMode,
+	)
+	if err := catalogHandler.RegisterRoutes(mux); err != nil {
 		return err
 	}
 

@@ -36,6 +36,7 @@ import (
 	pb "github.com/vllm-project/aibrix/apps/console/api/gen/console/v1"
 	"github.com/vllm-project/aibrix/apps/console/api/middleware"
 	plannerapi "github.com/vllm-project/aibrix/apps/console/api/planner/api"
+	rmtypes "github.com/vllm-project/aibrix/apps/console/api/resource_manager/types"
 	"github.com/vllm-project/aibrix/apps/console/api/store"
 )
 
@@ -45,6 +46,13 @@ type fakeJobPlanner struct {
 	cancelErr   error
 	cancelledID string
 	enqueued    *plannerapi.EnqueueRequest
+}
+
+func (f *fakeJobPlanner) FormatRegion(region *rmtypes.RegionSpec) string {
+	if region == nil {
+		return ""
+	}
+	return region.String()
 }
 
 func (p *fakeJobPlanner) Start(context.Context) error { return nil }

@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	plannerapi "github.com/vllm-project/aibrix/apps/console/api/planner/api"
 	plannerclient "github.com/vllm-project/aibrix/apps/console/api/planner/client"
@@ -52,6 +53,10 @@ type plannerBackend interface {
 // detail of an accepted provision.
 type provisionResponseLogger interface {
 	LogProvisionResponse(jobID string, prov *rmtypes.ProvisionResult, spec rmtypes.ResourceProvisionSpec)
+}
+
+type regionFormatterBackend interface {
+	FormatRegion(region *rmtypes.RegionSpec) string
 }
 
 // backendFactory constructs a plannerBackend for a provisioner type.
@@ -167,6 +172,45 @@ func defaultResourceDetailsFromProvisionSpec(spec rmtypes.ResourceProvisionSpec)
 // allocation behavior.
 type defaultPlannerBackend struct {
 	provider rmtypes.ResourceProvisionType
+}
+
+func (b *defaultPlannerBackend) FormatRegion(region *rmtypes.RegionSpec) string {
+	if region == nil {
+		return ""
+	}
+	switch b.provider {
+	case rmtypes.ResourceProvisionTypeAWS:
+		if region.AWS == nil {
+			return ""
+		}
+		return joinRegionParts(region.AWS.Region, region.AWS.Zone)
+	case rmtypes.ResourceProvisionTypeLambdaCloud:
+		if region.LambdaCloud == nil {
+			return ""
+		}
+		return region.LambdaCloud.Region
+	case rmtypes.ResourceProvisionTypeKubernetes:
+		if region.Kubernetes == nil {
+			return ""
+		}
+		return joinRegionParts(
+			region.Kubernetes.Context,
+			region.Kubernetes.Cluster,
+			region.Kubernetes.Namespace,
+		)
+	default:
+		return ""
+	}
+}
+
+func joinRegionParts(parts ...string) string {
+	nonEmptyParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			nonEmptyParts = append(nonEmptyParts, part)
+		}
+	}
+	return strings.Join(nonEmptyParts, "/")
 }
 
 func (b *defaultPlannerBackend) ValidateRequest(*plannerapi.EnqueueRequest) error {

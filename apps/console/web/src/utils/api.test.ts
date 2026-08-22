@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { camelToSnake, listAllJobs, normalizeFilesResponse } from './api';
+import {
+  camelToSnake,
+  listAllJobs,
+  listCatalogRegionsForAccelerators,
+  normalizeFilesResponse,
+} from './api';
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -130,6 +136,37 @@ describe('api helpers', () => {
         },
       },
     });
+  });
+
+  it('loads accelerator regions with one batch request and caches the snapshot', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const accelerators = ['NVIDIA-H20', 'A100-SXM-80GB'];
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        regions: {
+          'NVIDIA-H20': ['LF'],
+          'A100-SXM-80GB': ['HL'],
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    await expect(listCatalogRegionsForAccelerators(accelerators)).resolves.toEqual({
+      'NVIDIA-H20': ['LF'],
+      'A100-SXM-80GB': ['HL'],
+    });
+    await listCatalogRegionsForAccelerators(accelerators);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/catalog/regions',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ accelerators }),
+      }),
+    );
   });
 
   it('publishes the first jobs page while older pages are still loading', async () => {

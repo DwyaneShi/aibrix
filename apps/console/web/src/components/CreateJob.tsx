@@ -143,7 +143,8 @@ export function CreateJob({ onBack }: CreateJobProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const replicaLimits = jobCapabilities?.resourceRequest;
   const resourcePlugin = getCreateJobResourcePlugin(jobCapabilities?.provider ?? '');
-  const ResourceFields = resourcePlugin?.Fields;
+  const ResourceFields = resourcePlugin.Fields;
+  const ResourceSettingsGuide = resourcePlugin.SettingsGuide;
 
   useEffect(() => {
     apiListModels().then(m => {
@@ -475,10 +476,14 @@ export function CreateJob({ onBack }: CreateJobProps) {
     selectedExistingFileId: selectedExistingFile?.id ?? '',
     hasInferenceOverrides,
   });
-  const canSubmit = readiness.canSubmit && jobCapabilities !== null;
+  const resourceConfigError = resourcePlugin.validate?.(
+    resourceConfig,
+    completionWindow,
+  ) ?? null;
+  const canSubmit = readiness.canSubmit && jobCapabilities !== null && resourceConfigError === null;
   const blockedReason = jobCapabilities === null
     ? (jobCapabilitiesError ? `Failed to load job capabilities: ${jobCapabilitiesError}` : 'Loading job capabilities...')
-    : readiness.reason;
+    : resourceConfigError ?? readiness.reason;
   const canContinueDataset = selectedExistingFile != null || (selectedFile != null && (validation?.valid ?? false));
   const selectedModelLabel = formatModelSelectionLabel(selectedModel, selectedServingName);
 
@@ -533,7 +538,7 @@ export function CreateJob({ onBack }: CreateJobProps) {
           selectedEndpoint,
           selectedTemplate,
         }) as JobEndpoint;
-      const providerConfig = resourcePlugin?.toProviderConfig?.(
+      const providerConfig = resourcePlugin.toProviderConfig?.(
         resourceConfig,
         completionWindow,
       ) ?? {};
@@ -1010,7 +1015,7 @@ export function CreateJob({ onBack }: CreateJobProps) {
                       const nextCompletionWindow = e.target.value as CompletionWindowOption;
                       setCompletionWindow(nextCompletionWindow);
                       setResourceConfig(current => (
-                        resourcePlugin?.normalize?.(current, nextCompletionWindow) ?? current
+                        resourcePlugin.normalize?.(current, nextCompletionWindow) ?? current
                       ));
                     }}
                     className="w-full px-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 bg-white"
@@ -1033,7 +1038,7 @@ export function CreateJob({ onBack }: CreateJobProps) {
                 <div className="border-t border-gray-100 pt-4">
                   <h3 className="text-sm font-medium mb-1">Resources</h3>
                   <p className="text-xs text-gray-400 mb-4">
-                    Choose how many dedicated workers this batch should provision.
+                    Configure how this batch provisions compute resources.
                   </p>
                   {jobCapabilitiesError && (
                     <p className="text-xs text-red-500 mb-4">
@@ -1041,33 +1046,23 @@ export function CreateJob({ onBack }: CreateJobProps) {
                     </p>
                   )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm mb-1">Service replicas</label>
-                      <p className="text-xs text-gray-400 mb-1">
-                        {replicaLimits ? `${replicaLimits.minReplicas} - ${replicaLimits.maxReplicas}` : 'Loading limits...'}
-                      </p>
-                      <input
-                        type="text"
-                        value={replicas}
-                        onChange={(e) => handleParamChange('replicas', e.target.value, setReplicas, replicaLimits?.minReplicas, replicaLimits?.maxReplicas, true)}
-                        placeholder="1"
-                        className={`w-full px-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 ${
-                          paramErrors.replicas ? 'border-red-300' : 'border-gray-200'
-                        }`}
-                      />
-                      {paramErrors.replicas && (
-                        <p className="text-xs text-red-500 mt-1">{paramErrors.replicas}</p>
-                      )}
-                    </div>
-                    {ResourceFields && (
-                      <ResourceFields
-                        completionWindow={completionWindow}
-                        value={resourceConfig}
-                        onChange={setResourceConfig}
-                      />
+                  <ResourceFields
+                    completionWindow={completionWindow}
+                    acceleratorType={selectedTemplate?.spec?.accelerator?.type}
+                    replicas={replicas}
+                    replicaLimits={replicaLimits}
+                    replicaError={paramErrors.replicas}
+                    onReplicasChange={(value) => handleParamChange(
+                      'replicas',
+                      value,
+                      setReplicas,
+                      replicaLimits?.minReplicas,
+                      replicaLimits?.maxReplicas,
+                      true,
                     )}
-                  </div>
+                    value={resourceConfig}
+                    onChange={setResourceConfig}
+                  />
                 </div>
 
                 {/* Client settings section (extra_body.aibrix.client) */}
@@ -1437,10 +1432,7 @@ export function CreateJob({ onBack }: CreateJobProps) {
                   <p className="text-gray-500">The output file is created automatically after successful requests complete.</p>
                 </div>
 
-                <div>
-                  <div className="mb-1">Service replicas:</div>
-                  <p className="text-gray-500">The number of dedicated workers to provision for this batch.</p>
-                </div>
+                {ResourceSettingsGuide && <ResourceSettingsGuide />}
 
                 <h4 className="mt-4 mb-2">Inference Parameters</h4>
                 <p className="text-xs text-gray-400 mb-2">All parameters are optional. If left empty, per-request values from the JSONL file take precedence, otherwise model defaults apply.</p>
